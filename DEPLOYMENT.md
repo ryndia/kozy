@@ -1,10 +1,14 @@
-# Deployment — kozy.mu → kozy.ryndia.space
+# Deployment — kozy.ryndia.space
 
-Production deployment of the Kozy Laravel app on a VPS, with MySQL, Redis, a
-queue worker and a scheduler in containers, behind the host's Nginx + Let's Encrypt.
+Everything lives in one file: [deploy.sh](deploy.sh). Copy the project to the
+server, run it, and it generates the Docker stack, the `.env` (with fresh
+secrets), and the Nginx vhost itself.
 
-Modelled on the `visual.ryndia.space` deployment, with ports offset so both
-stacks coexist on one server.
+```bash
+cd /var/www/kozy.ryndia.space
+./deploy.sh          # first run → full setup; every run after → deploy
+./deploy.sh nginx    # install the vhost + obtain the TLS certificate
+```
 
 ---
 
@@ -14,14 +18,14 @@ stacks coexist on one server.
 |---|---|---|
 | Nginx + TLS | Host | Terminates HTTPS, proxies to `127.0.0.1:8081` |
 | `kozy-app` | Container | Laravel via `artisan serve` under supervisord (Sail 8.4 runtime) |
-| `kozy-queue` | Container | `queue:work` — mail, notifications, PDF receipts |
+| `kozy-queue` | Container | `queue:work` — receipts, notifications |
 | `kozy-scheduler` | Container | `schedule:work` |
 | `kozy-mysql` | Container | MySQL 8.0, volume `kozy_kozy-mysql` |
-| `kozy-redis` | Container | Redis 7, cache + sessions + queue, volume `kozy_kozy-redis` |
-| Mail | External | SMTP relay (host mailserver or a provider) — no mail container |
+| `kozy-redis` | Container | Redis 7 — cache, sessions, queue |
+| `kozy-mailserver` | Container | docker-mailserver — OTP email, DKIM-signed |
 
-Everything is defined in [docker-compose.prod.yml](docker-compose.prod.yml).
-The local-dev [docker-compose.yml](docker-compose.yml) (Mailpit) is untouched.
+Generated files (`docker-compose.prod.yml`, `nginx-kozy.ryndia.space.conf`) are
+rewritten on every run and are gitignored. **Edit `deploy.sh`, not them.**
 
 ### Port map (shared VPS)
 
@@ -30,228 +34,276 @@ The local-dev [docker-compose.yml](docker-compose.yml) (Mailpit) is untouched.
 | App (HTTP) | `8080` | `127.0.0.1:8081` |
 | MySQL | `3307` | `127.0.0.1:3308` |
 | Redis | `6380` | `127.0.0.1:6381` |
+| Mail (SMTP/SMTPS/submission/IMAPS) | `25/465/587/993` | `127.0.0.1:2525/4465/5587/9993` |
 
-Kozy's ports bind to loopback only — nothing but the host Nginx (and you, over
-SSH) can reach them.
+Nothing but the host Nginx reaches kozy's containers. The mail server is
+**send-only** by default precisely so it does not fight visual's mailserver for
+ports 25/465/587/993 — see [Mail](#mail--otp-delivery).
 
 ---
 
-## Files
+## Commands
 
-| File | Purpose |
-|---|---|
-| `docker-compose.prod.yml` | The production stack |
-| `.env.production.example` | Env template; secrets are generated at setup |
-| `setup-production.sh` | First-time server setup (run once) |
-| `deploy.sh` | Every deploy after that |
-| `nginx-kozy.ryndia.space.conf` | Host vhost, TLS + reverse proxy + CSP |
-| `.dockerignore` | Keeps secrets and build junk out of image context |
+```
+./deploy.sh                  first run → full setup; afterwards → deploy
+./deploy.sh setup            force the full first-run setup
+./deploy.sh mail             (re)create the mailbox + DKIM, print DNS records
+./deploy.sh nginx            install the vhost and obtain the TLS certificate
+./deploy.sh backup           dump the database now
+./deploy.sh status           container status and health
+./deploy.sh logs [service]   follow logs (default: app)
+./deploy.sh artisan <args>   run an artisan command
+./deploy.sh shell [service]  open a shell in a container
+./deploy.sh help
+```
+
+Deploy flags: `--no-pull`, `--no-assets`, `--no-backup`, `--no-maintenance`,
+`--branch=NAME`.
 
 ---
 
 ## 1. Server prerequisites
 
-DNS: `kozy.ryndia.space` → the VPS IP (A/AAAA record).
+DNS: `kozy.ryndia.space` → the VPS IP.
 
 ```bash
-# Docker (skip if visual.ryndia.space is already on this box)
 curl -fsSL https://get.docker.com | sh
 sudo apt install -y docker-compose-plugin nginx certbot python3-certbot-nginx
-
-# Deployer user
-sudo usermod -aG docker "$USER"   # log out and back in
-
-# Firewall
-sudo ufw allow 22/tcp && sudo ufw allow 80/tcp && sudo ufw allow 443/tcp && sudo ufw enable
+sudo usermod -aG docker "$USER"     # log out and back in
+sudo ufw allow 22,80,443/tcp && sudo ufw enable
 ```
 
-## 2. Get the code onto the server
+## 2. Get the code there
 
 ```bash
-sudo mkdir -p /var/www/kozy.mu && sudo chown "$USER:$USER" /var/www/kozy.mu
-git clone <your-repo> /var/www/kozy.mu
-cd /var/www/kozy.mu
+sudo mkdir -p /var/www/kozy.ryndia.space && sudo chown "$USER:$USER" /var/www/kozy.ryndia.space
+git clone git@github.com:ryndia/kozy.git /var/www/kozy.ryndia.space
+cd /var/www/kozy.ryndia.space
 ```
 
-No git remote yet? `rsync` works too — `deploy.sh` detects the absence of a
-repo and skips the pull instead of failing:
+`rsync` works too — the script detects a missing git repo and skips the pull:
 
 ```bash
-rsync -az --delete \
-  --exclude node_modules --exclude vendor --exclude .env \
-  --exclude storage/logs --exclude storage/backups \
-  ./ deployer@vps:/var/www/kozy.mu/
+rsync -az --delete --exclude node_modules --exclude vendor --exclude .env \
+  --exclude storage/logs --exclude storage/backups ./ deployer@vps:/var/www/kozy.ryndia.space/
 ```
 
-## 3. First-time setup
+## 3. First run
 
 ```bash
-chmod +x setup-production.sh deploy.sh
-./setup-production.sh
+chmod +x deploy.sh
+./deploy.sh
 ```
 
-It checks prerequisites, writes `.env` from `.env.production.example` with
-freshly generated DB/Redis passwords (`chmod 600`), bootstraps Composer,
-builds and starts the stack, waits for MySQL/Redis health, fixes permissions,
-runs `key:generate` and `migrate --force`, links storage, builds the frontend,
-publishes Filament assets, caches config/routes/views, and offers to create the
-first admin.
+Checks prerequisites → writes `.env` with generated DB/Redis/mailbox secrets
+(`chmod 600`) → generates the compose file → bootstraps Composer → builds and
+starts the stack → waits for MySQL/Redis health → fixes permissions →
+`key:generate` → `migrate --force` → `storage:link` → `npm ci && npm run build`
+→ `filament:assets` → `optimize` → configures the mail server (mailbox, DKIM,
+DNS records) → offers to create the first admin.
 
-**`.env` is never overwritten** if it already exists.
+`.env` is never overwritten if it already exists.
 
 ## 4. Nginx + TLS
 
 ```bash
-sudo cp nginx-kozy.ryndia.space.conf /etc/nginx/sites-available/kozy.ryndia.space
-sudo ln -s /etc/nginx/sites-available/kozy.ryndia.space /etc/nginx/sites-enabled/
-sudo mkdir -p /var/www/certbot
-sudo certbot --nginx -d kozy.ryndia.space
-sudo nginx -t && sudo systemctl reload nginx
+./deploy.sh nginx
 ```
 
-Certbot rewrites the file in place; the config already contains the `ssl_*`
-lines it expects, so re-running it is safe.
+If no certificate exists yet, it installs a temporary HTTP-only vhost, runs
+`certbot certonly --webroot`, then swaps in the real TLS vhost and reloads —
+so `nginx -t` never fails on a certificate that isn't there yet.
 
-## 5. Finish the configuration
+## 5. Stripe
 
-Edit `.env` and replace the `__SET_ME__` values:
+Replace the `__SET_ME__` values in `.env`, then redeploy. `STRIPE_KEY` feeds
+`VITE_STRIPE_KEY`, which is **compiled into the JS bundle** — it needs an asset
+rebuild, not just a config cache:
+
+```bash
+./deploy.sh --no-pull
+```
+
+Leaving the keys empty is supported; bookings then settle manually.
+
+---
+
+## Mail — OTP delivery
+
+`RenterOtpNotification` is sent **synchronously inside the request** (it does
+not implement `ShouldQueue`), so the SMTP hop has to be fast and local. It is:
+the app submits to the `mailserver` container over the internal Docker network
+on port 25, no auth, authorised by `PERMIT_DOCKER=network`. The mail server
+signs with DKIM and relays outward.
+
+### Send-only by default
+
+Same docker-mailserver configuration as visual.ryndia.space, with one
+difference: the public ports are not published. Sending needs no inbound port,
+so kozy's mail server coexists with visual's on one VPS. Consequences:
+
+- OTP mail goes out, DKIM-signed. ✅
+- Nothing can be *received* at `@kozy.ryndia.space` (no MX, no IMAP).
+- DMARC starts at `p=none` — with no inbox, aggregate reports can't be read.
+
+To run a full MTA (on a host where 25/465/587/993 are free), set in `.env`:
 
 ```env
-STRIPE_KEY=pk_live_...
-STRIPE_SECRET=sk_live_...
-STRIPE_WEBHOOK_SECRET=whsec_...
+MAIL_BIND_SMTP=0.0.0.0:25
+MAIL_BIND_SMTPS=0.0.0.0:465
+MAIL_BIND_SUBMISSION=0.0.0.0:587
+MAIL_BIND_IMAPS=0.0.0.0:993
+MAIL_SSL_TYPE=letsencrypt
+MAIL_ENABLE_RSPAMD=1
+MAIL_ENABLE_FAIL2BAN=1
 ```
 
-`STRIPE_KEY` feeds `VITE_STRIPE_KEY`, which is **baked into the JS bundle** —
-after changing it, rebuild the frontend, not just the config cache:
+then `sudo ufw allow 25,465,587,993/tcp`, get a cert for `mail.kozy.ryndia.space`,
+add the MX record, and redeploy.
+
+### DNS records
+
+`./deploy.sh mail` prints them filled in with the live IP and the real DKIM key.
+In the `ryndia.space` Cloudflare zone, **all DNS-only (grey cloud)**:
+
+| Type | Name | Value |
+|---|---|---|
+| A | `mail.kozy` | *VPS IP* |
+| TXT | `kozy` | `v=spf1 a mx ip4:<VPS IP> -all` |
+| TXT | `mail._domainkey.kozy` | *printed by `./deploy.sh mail`* |
+| TXT | `_dmarc.kozy` | `v=DMARC1; p=none; rua=mailto:noreply@kozy.ryndia.space` |
+| MX | `kozy` | `mail.kozy.ryndia.space` (10) — only with inbound enabled |
+
+Plus a **PTR** record at the VPS provider: *VPS IP* → `mail.kozy.ryndia.space`.
+Without it, Gmail and Outlook will reject or spam-file the OTP.
+
+### Verifying
 
 ```bash
-docker compose -f docker-compose.prod.yml exec app php artisan config:cache
-./deploy.sh --no-pull        # rebuilds assets with the new VITE_STRIPE_KEY
+./deploy.sh artisan tinker
+>>> Mail::raw('OTP test', fn ($m) => $m->to('you@gmail.com')->subject('Kozy'));
+./deploy.sh logs mailserver     # look for: DKIM-Signature field added
+dig TXT mail._domainkey.kozy.ryndia.space +short
 ```
 
-Leaving the Stripe keys empty is supported — bookings then settle manually.
+`./deploy.sh status` reports whether SMTP is listening and whether DKIM signing
+is actually active.
 
-### Mail
+### If OTP mail lands in spam
 
-The default `MAIL_HOST=host.docker.internal:25` relays through the
-docker-mailserver already running on the VPS for `visual.ryndia.space`. Either
-add a `kozy.mu` sender domain there, or point `MAIL_*` at an external provider
-(Mailgun, Postmark, SES, Resend). Test it:
+A fresh VPS IP has no sending reputation, and some providers block outbound
+port 25 entirely. Relay through a provider instead — same container, four env
+vars:
+
+```env
+MAIL_RELAY_HOST=smtp.provider.com
+MAIL_RELAY_PORT=587
+MAIL_RELAY_USER=...
+MAIL_RELAY_PASSWORD=...
+```
+
+then `./deploy.sh`. Test deliverability at https://www.mail-tester.com.
+
+### Managing mailboxes
 
 ```bash
-docker compose -f docker-compose.prod.yml exec app php artisan tinker
->>> Mail::raw('test', fn ($m) => $m->to('you@example.com')->subject('Kozy'));
+./deploy.sh shell mailserver
+setup email list
+setup email add someone@kozy.ryndia.space
+setup email update noreply@kozy.ryndia.space
+setup config dkim domain kozy.ryndia.space
 ```
+
+> **Never regenerate a DKIM key** that is already published in DNS without
+> updating the TXT record — every message signed with the new key fails until
+> DNS catches up. `./deploy.sh mail` keeps an existing key for this reason.
 
 ---
 
 ## Deploying changes
 
 ```bash
-cd /var/www/kozy.mu
 ./deploy.sh
 ```
 
-Backs up the database → maintenance mode → pull → build → `composer install
---no-dev` → `migrate --force` → `npm ci && npm run build` → Filament assets →
-`optimize` → restart workers → maintenance off → health check.
+Pull → regenerate stack → `up -d --build` → **database backup** → maintenance
+mode → permissions → `composer install --no-dev` → `migrate --force` →
+`npm ci && npm run build` → `filament:assets` → `optimize` → restart workers →
+maintenance off → health checks.
 
-| Flag | Effect |
-|---|---|
-| `--no-pull` | Deploy the code already on disk |
-| `--no-assets` | Skip `npm ci` / `npm run build` (backend-only change) |
-| `--no-backup` | Skip the pre-migration MySQL dump |
-| `--no-maintenance` | Stay online for the duration |
-| `--branch=main` | Branch to pull (default: current branch) |
-
-A failure mid-deploy lifts maintenance mode via an `EXIT` trap, so the site
-never stays dark because a build broke.
+A failure mid-deploy lifts maintenance mode through an `EXIT` trap, so a broken
+build never leaves the site dark.
 
 ---
 
 ## Backups
 
-`deploy.sh` dumps MySQL to `storage/backups/kozy-YYYYMMDD-HHMMSS.sql.gz`
+`./deploy.sh` dumps MySQL to `storage/backups/kozy-YYYYMMDD-HHMMSS.sql.gz`
 before migrating and keeps the newest 10. **A failed dump aborts the deploy**
-before any migration runs.
+before any migration runs. On demand: `./deploy.sh backup`.
 
 Nightly cron on the host:
 
 ```cron
-0 3 * * * cd /var/www/kozy.mu && docker compose -f docker-compose.prod.yml exec -T mysql \
-  mysqldump -uroot -p"$(grep '^DB_ROOT_PASSWORD=' .env | cut -d= -f2-)" \
-  --single-transaction --quick kozy | gzip > storage/backups/nightly-$(date +\%F).sql.gz
+0 3 * * * cd /var/www/kozy.ryndia.space && ./deploy.sh backup >/dev/null 2>&1
 ```
 
 Restore:
 
 ```bash
 gunzip < storage/backups/kozy-20260822-120000.sql.gz | \
-  docker compose -f docker-compose.prod.yml exec -T mysql \
+  docker compose -f docker-compose.prod.yml --env-file .env exec -T mysql \
   mysql -uroot -p"$(grep '^DB_ROOT_PASSWORD=' .env | cut -d= -f2-)" kozy
 ```
 
-Uploaded property images live in `storage/app/public` on the host bind mount —
-back that up too (`tar czf uploads.tgz storage/app/public`).
-
----
-
-## Operations cheat sheet
-
-```bash
-alias kozy='docker compose -f /var/www/kozy.mu/docker-compose.prod.yml --env-file /var/www/kozy.mu/.env'
-
-kozy ps                       # status
-kozy logs -f app              # app logs
-kozy logs -f queue            # queue worker
-kozy exec app php artisan about
-kozy exec app php artisan queue:failed
-kozy exec app php artisan make:admin "Name" --email=you@kozy.mu
-kozy exec mysql mysql -ukozy -p kozy      # SQL shell
-kozy restart app queue scheduler
-kozy down                     # stop (volumes survive)
-```
+Uploaded property images live in `storage/app/public` — back that up too
+(`tar czf uploads.tgz storage/app/public`).
 
 ---
 
 ## Troubleshooting
 
-**502 from Nginx** — the app container is down or still booting.
-`kozy ps` then `kozy logs --tail=100 app`. Confirm `APP_PORT` in `.env`
-matches the `proxy_pass` port in the vhost.
+**502 from Nginx** — app container down or still booting: `./deploy.sh status`,
+then `./deploy.sh logs app`. Check `APP_PORT` matches the vhost's `proxy_pass`.
 
-**"Please provide a valid cache path" / permission errors** — rerun the
-permission step: `kozy exec -u root app chown -R sail:sail /var/www/html/storage /var/www/html/bootstrap/cache`.
+**Permission errors on cache/log paths** — `./deploy.sh` fixes permissions on
+every run; to do it alone: `./deploy.sh shell app` then
+`chown -R sail:sail storage bootstrap/cache` as root.
 
-**Migrations hang or "connection refused"** — MySQL wasn't healthy yet.
-`docker inspect -f '{{.State.Health.Status}}' kozy-mysql`. Both scripts wait
-for `healthy`, so this usually means MySQL is genuinely failing — read
-`kozy logs mysql`.
+**Migrations hang** — MySQL isn't healthy: `./deploy.sh logs mysql`.
 
-**Redis `NOAUTH`** — `REDIS_PASSWORD` in `.env` drifted from the value the
-container started with. Restart Redis after changing it: `kozy up -d redis`.
+**Redis `NOAUTH`** — `REDIS_PASSWORD` drifted from what the container started
+with. `docker compose -f docker-compose.prod.yml --env-file .env up -d redis`.
 
-**Mixed content / wrong URLs** — `APP_URL` must be the `https://` address and
-`TRUSTED_PROXIES=*` must be set, since TLS terminates at Nginx.
+**OTP email never arrives**
+1. `./deploy.sh status` — is SMTP listening, is DKIM active?
+2. `./deploy.sh logs mailserver` — look for `status=sent`, `status=bounced`, `status=deferred`.
+3. `./deploy.sh shell mailserver` → `mailq` — anything stuck?
+4. `deferred … Connection timed out` on port 25 means the provider blocks
+   outbound SMTP → use a relay (above).
+5. Delivered but in spam → check SPF/DKIM/DMARC/PTR.
 
-**Session lost after login** — `SESSION_DOMAIN` must match the host exactly
-(`kozy.ryndia.space`) and `SESSION_SECURE_COOKIE=true` requires HTTPS.
+**Mail goes out unsigned** — OpenDKIM loads its signing tables only when the
+container is *recreated*, not merely restarted. `./deploy.sh mail` detects an
+empty `/etc/opendkim/SigningTable` and recreates the container for you.
 
-**Stripe key changes don't take effect in the browser** — `VITE_STRIPE_KEY` is
-compiled into the bundle; you must rebuild assets, not just `config:cache`.
+**Mixed content / wrong URLs** — `APP_URL` must be `https://…` and
+`TRUSTED_PROXIES=*` set, since TLS terminates at Nginx.
 
-**Old assets served after deploy** — hard-refresh; Vite's manifest is
-content-hashed, so a stale `public/build` means the build step was skipped.
+**Session lost after login** — `SESSION_DOMAIN` must be exactly
+`kozy.ryndia.space`, and `SESSION_SECURE_COOKIE=true` requires HTTPS.
+
+**Stripe key change has no effect in the browser** — rebuild assets
+(`./deploy.sh --no-pull`); `VITE_STRIPE_KEY` is baked into the bundle.
 
 ---
 
 ## Security notes
 
-- `.env` is `chmod 600` and excluded from Docker context via `.dockerignore`.
-- MySQL and Redis publish on `127.0.0.1` only; the app port too.
-- `APP_DEBUG=false` and `LOG_LEVEL=error` in the template — never flip these on
-  a live site to debug; use `kozy logs -f app` instead.
-- Redis requires a password (`--requirepass`), unlike the dev default.
-- The vhost sets HSTS, `X-Content-Type-Options`, and a CSP scoped to Stripe and
-  Bunny Fonts. Widen the CSP deliberately if you add a third-party script.
+- `.env` is `chmod 600`; secrets are generated per install, never committed.
+- MySQL, Redis, the app port and (by default) all mail ports bind to `127.0.0.1`.
+- `APP_DEBUG=false`, `LOG_LEVEL=error`. Use `./deploy.sh logs app` to debug.
+- Redis requires a password; MySQL has separate root and app credentials.
+- The vhost sets HSTS, `nosniff`, and a CSP scoped to Stripe and Bunny Fonts.
+- Rspamd/Fail2Ban stay off while the mail server is send-only (nothing inbound
+  to filter, no public port to brute-force); turn both on with inbound mail.

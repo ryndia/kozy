@@ -1,66 +1,975 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════
-# Deployment script for kozy.mu → kozy.ryndia.space
+#  kozy.ryndia.space — single-file deployment
 # ═══════════════════════════════════════════════════════════════════
 #
-# Usage:
-#   ./deploy.sh                 # full deploy (pull, build, migrate, cache)
-#   ./deploy.sh --no-pull       # deploy the code already on disk
-#   ./deploy.sh --no-assets     # skip npm ci / npm run build (backend-only change)
-#   ./deploy.sh --no-backup     # skip the pre-migration MySQL dump
-#   ./deploy.sh --no-maintenance# stay online during the deploy
-#   ./deploy.sh --branch=main   # branch to pull (default: current branch)
+#  One file, run on the server. It generates the Docker stack, the .env
+#  (with fresh secrets), and the Nginx vhost itself — there is no other
+#  deployment config to keep in sync.
 #
-# First-time setup on a fresh server is setup-production.sh, not this.
+#  Stack:  Laravel (Sail 8.4 runtime) + MySQL 8 + Redis 7
+#          + queue worker + scheduler + docker-mailserver (OTP email)
+#
+#  Commands
+#    ./deploy.sh                  first run → full setup; afterwards → deploy
+#    ./deploy.sh setup            force the full first-run setup
+#    ./deploy.sh mail             (re)create the mailbox + DKIM, print DNS records
+#    ./deploy.sh nginx            install the vhost and obtain the TLS certificate
+#    ./deploy.sh backup           dump the database now
+#    ./deploy.sh status           container status and health
+#    ./deploy.sh logs [service]   follow logs (default: app)
+#    ./deploy.sh artisan <args>   run an artisan command in the app container
+#    ./deploy.sh shell [service]  open a shell in a container (default: app)
+#    ./deploy.sh help
+#
+#  Deploy flags
+#    --no-pull   --no-assets   --no-backup   --no-maintenance   --branch=NAME
+#    --allow-non-production   (run against a non-production .env — rarely right)
+#
+#  Requirements: Docker Engine + Compose plugin, this user in the docker
+#  group, the app source in this directory, DNS pointing at this host.
 # ═══════════════════════════════════════════════════════════════════
 
 set -euo pipefail
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
+# ═══════════════════════════════════════════════════════════════════
+#  Settings
+# ═══════════════════════════════════════════════════════════════════
 
-info() { echo -e "\n${BLUE}▶${NC} $1"; }
-ok()   { echo -e "  ${GREEN}✓${NC} $1"; }
-warn() { echo -e "  ${YELLOW}⚠${NC} $1"; }
-fail() { echo -e "  ${RED}✗${NC} $1"; exit 1; }
+APP_DOMAIN="kozy.ryndia.space"
+COMPOSE_FILE="docker-compose.prod.yml"
+NGINX_CONF="nginx-${APP_DOMAIN}.conf"
+BACKUP_DIR_NAME="storage/backups"
+BACKUP_KEEP=10
 
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$PROJECT_DIR"
+BACKUP_DIR="$PROJECT_DIR/$BACKUP_DIR_NAME"
 
-COMPOSE_FILE="docker-compose.prod.yml"
-BACKUP_DIR="$PROJECT_DIR/storage/backups"
-BACKUP_KEEP=10
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 
-DO_PULL=true
-DO_ASSETS=true
-DO_BACKUP=true
-DO_MAINTENANCE=true
-BRANCH=""
+info()  { echo -e "\n${BLUE}▶${NC} $1"; }
+ok()    { echo -e "  ${GREEN}✓${NC} $1"; }
+warn()  { echo -e "  ${YELLOW}⚠${NC} $1"; }
+fail()  { echo -e "  ${RED}✗${NC} $1"; exit 1; }
+title() {
+    echo -e "${BLUE}═══════════════════════════════════════════════════${NC}"
+    echo -e "${BLUE}  $1${NC}"
+    echo -e "${BLUE}═══════════════════════════════════════════════════${NC}"
+}
 
-for arg in "$@"; do
-    case "$arg" in
-        --no-pull)        DO_PULL=false ;;
-        --no-assets)      DO_ASSETS=false ;;
-        --no-backup)      DO_BACKUP=false ;;
-        --no-maintenance) DO_MAINTENANCE=false ;;
-        --branch=*)       BRANCH="${arg#*=}" ;;
-        -h|--help)        sed -n '2,20p' "$0"; exit 0 ;;
-        *)                fail "Unknown option: $arg (try --help)" ;;
-    esac
-done
-
-compose() { docker compose -f "$COMPOSE_FILE" --env-file .env "$@"; }
+compose()          { docker compose -f "$COMPOSE_FILE" --env-file .env "$@"; }
 run_in_container() { compose exec -T app "$@"; }
 run_as_root()      { compose exec -u root -T app "$@"; }
+env_value()        { grep -E "^$1=" .env 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"'; }
 
-[ -f "$COMPOSE_FILE" ] || fail "$COMPOSE_FILE not found — wrong directory?"
-[ -f .env ] || fail ".env not found — run ./setup-production.sh first"
-grep -qE "^APP_ENV=production" .env || warn "APP_ENV is not 'production' in .env"
+# Record name relative to the ryndia.space zone (kozy.ryndia.space → kozy).
+dns_name() {
+    case "$1" in
+        *.ryndia.space) echo "${1%.ryndia.space}" ;;
+        *)              echo "$1" ;;
+    esac
+}
 
-echo -e "${BLUE}═══════════════════════════════════════════════════${NC}"
-echo -e "${BLUE}  Deploying kozy.mu → kozy.ryndia.space${NC}"
-echo -e "${BLUE}═══════════════════════════════════════════════════${NC}"
+# ═══════════════════════════════════════════════════════════════════
+#  Generated config — the compose file and vhost live here, in this
+#  script, so there is a single source of truth. Edit them here.
+# ═══════════════════════════════════════════════════════════════════
 
-# Bring the app back up if we bail out midway.
+write_compose_file() {
+    cat > "$COMPOSE_FILE" <<'COMPOSE_EOF'
+# ═══════════════════════════════════════════════════════════════════
+# GENERATED BY deploy.sh — do not edit; your changes will be overwritten
+# on the next deploy. Edit write_compose_file() in deploy.sh instead.
+# ═══════════════════════════════════════════════════════════════════
+
+name: kozy
+
+services:
+    # ── Laravel application (artisan serve under supervisord) ───────
+    app:
+        build:
+            context: ./vendor/laravel/sail/runtimes/8.4
+            dockerfile: Dockerfile
+            args:
+                WWWGROUP: '${WWWGROUP:-1000}'
+        image: kozy-8.4/app
+        container_name: kozy-app
+        restart: unless-stopped
+        extra_hosts:
+            - 'host.docker.internal:host-gateway'
+        ports:
+            # Loopback only: the host Nginx is the sole public entrance.
+            - '127.0.0.1:${APP_PORT:-8081}:80'
+        environment:
+            WWWUSER: '${WWWUSER:-1000}'
+            LARAVEL_SAIL: 1
+            SUPERVISOR_PHP_USER: sail
+            XDEBUG_MODE: 'off'
+        volumes:
+            - '.:/var/www/html'
+        networks:
+            - kozy
+        depends_on:
+            mysql:
+                condition: service_healthy
+            redis:
+                condition: service_healthy
+            mailserver:
+                condition: service_started
+        healthcheck:
+            test: ['CMD-SHELL', 'curl -fsS http://127.0.0.1/up >/dev/null || exit 1']
+            interval: 30s
+            timeout: 10s
+            retries: 5
+            start_period: 60s
+
+    # ── Queue worker ────────────────────────────────────────────────
+    # OTP mail is sent synchronously inside the request (the notification
+    # is not ShouldQueue), so a stalled worker never blocks a login.
+    # This handles everything else: receipts, admin notifications.
+    queue:
+        image: kozy-8.4/app
+        container_name: kozy-queue
+        restart: unless-stopped
+        command: php artisan queue:work --sleep=3 --tries=3 --backoff=10 --max-time=3600 --max-jobs=500
+        extra_hosts:
+            - 'host.docker.internal:host-gateway'
+        environment:
+            WWWUSER: '${WWWUSER:-1000}'
+            LARAVEL_SAIL: 1
+            SUPERVISOR_PHP_USER: sail
+        volumes:
+            - '.:/var/www/html'
+        networks:
+            - kozy
+        stop_grace_period: 60s
+        depends_on:
+            app:
+                condition: service_started
+            mysql:
+                condition: service_healthy
+            redis:
+                condition: service_healthy
+            mailserver:
+                condition: service_started
+
+    # ── Scheduler ───────────────────────────────────────────────────
+    scheduler:
+        image: kozy-8.4/app
+        container_name: kozy-scheduler
+        restart: unless-stopped
+        command: php artisan schedule:work
+        extra_hosts:
+            - 'host.docker.internal:host-gateway'
+        environment:
+            WWWUSER: '${WWWUSER:-1000}'
+            LARAVEL_SAIL: 1
+            SUPERVISOR_PHP_USER: sail
+        volumes:
+            - '.:/var/www/html'
+        networks:
+            - kozy
+        depends_on:
+            app:
+                condition: service_started
+
+    # ── Mail server (docker-mailserver) ─────────────────────────────
+    # Same configuration as visual.ryndia.space, with one difference: it
+    # is SEND-ONLY by default and publishes nothing on the public
+    # interface, so it cannot collide with the mailserver already holding
+    # ports 25/465/587/993 for visual.ryndia.space on this VPS. The app
+    # submits over the internal Docker network (PERMIT_DOCKER=network).
+    #
+    # To run it as a full MTA (receive mail, IMAP clients) on a host where
+    # those ports are free, set in .env:
+    #   MAIL_BIND_SMTP=0.0.0.0:25        MAIL_BIND_SMTPS=0.0.0.0:465
+    #   MAIL_BIND_SUBMISSION=0.0.0.0:587 MAIL_BIND_IMAPS=0.0.0.0:993
+    #   MAIL_SSL_TYPE=letsencrypt  MAIL_ENABLE_RSPAMD=1  MAIL_ENABLE_FAIL2BAN=1
+    mailserver:
+        image: 'ghcr.io/docker-mailserver/docker-mailserver:latest'
+        container_name: kozy-mailserver
+        hostname: '${MAIL_HOSTNAME:-mail.kozy.ryndia.space}'
+        restart: unless-stopped
+        ports:
+            - '${MAIL_BIND_SMTP:-127.0.0.1:2525}:25'          # SMTP
+            - '${MAIL_BIND_SMTPS:-127.0.0.1:4465}:465'        # SMTPS
+            - '${MAIL_BIND_SUBMISSION:-127.0.0.1:5587}:587'   # Submission
+            - '${MAIL_BIND_IMAPS:-127.0.0.1:9993}:993'        # IMAPS
+        environment:
+            OVERRIDE_HOSTNAME: '${MAIL_HOSTNAME:-mail.kozy.ryndia.space}'
+            POSTMASTER_ADDRESS: '${MAIL_POSTMASTER:-postmaster@kozy.ryndia.space}'
+            PERMIT_DOCKER: network          # lets kozy-app submit on :25
+            ONE_DIR: 1
+            ENABLE_OPENDKIM: 1              # sign outgoing OTP mail
+            ENABLE_RSPAMD: '${MAIL_ENABLE_RSPAMD:-0}'      # inbound only
+            ENABLE_FAIL2BAN: '${MAIL_ENABLE_FAIL2BAN:-0}'  # public ports only
+            ENABLE_CLAMAV: 0
+            ENABLE_POSTGREY: 0
+            ENABLE_SPAMASSASSIN: 0
+            SSL_TYPE: '${MAIL_SSL_TYPE:-}'
+            LOG_LEVEL: info
+            # Optional smarthost — relay outbound instead of delivering
+            # direct. Recommended if the VPS IP has no sending reputation
+            # or the provider blocks port 25: an OTP in spam is a dead login.
+            RELAY_HOST: '${MAIL_RELAY_HOST:-}'
+            RELAY_PORT: '${MAIL_RELAY_PORT:-587}'
+            RELAY_USER: '${MAIL_RELAY_USER:-}'
+            RELAY_PASSWORD: '${MAIL_RELAY_PASSWORD:-}'
+        volumes:
+            - 'kozy-mail-data:/var/mail'
+            - 'kozy-mail-state:/var/mail-state'
+            - 'kozy-mail-logs:/var/log/mail'
+            - 'kozy-mail-config:/tmp/docker-mailserver'
+            - '/etc/letsencrypt:/etc/letsencrypt:ro'
+        networks:
+            - kozy
+        cap_add:
+            - NET_ADMIN
+        healthcheck:
+            test: ['CMD-SHELL', 'ss --listening --tcp | grep -P "LISTEN.+:smtp" || exit 1']
+            interval: 30s
+            timeout: 10s
+            retries: 3
+            start_period: 60s
+
+    # ── MySQL 8.0 ───────────────────────────────────────────────────
+    mysql:
+        image: 'mysql:8.0'
+        container_name: kozy-mysql
+        restart: unless-stopped
+        command:
+            - '--character-set-server=utf8mb4'
+            - '--collation-server=utf8mb4_unicode_ci'
+            - '--max-allowed-packet=64M'
+        ports:
+            - '127.0.0.1:${FORWARD_DB_PORT:-3308}:3306'
+        environment:
+            MYSQL_ROOT_PASSWORD: '${DB_ROOT_PASSWORD:?DB_ROOT_PASSWORD is required}'
+            MYSQL_DATABASE: '${DB_DATABASE:-kozy}'
+            MYSQL_USER: '${DB_USERNAME:-kozy}'
+            MYSQL_PASSWORD: '${DB_PASSWORD:?DB_PASSWORD is required}'
+        volumes:
+            - 'kozy-mysql:/var/lib/mysql'
+        networks:
+            - kozy
+        healthcheck:
+            test: ['CMD', 'mysqladmin', 'ping', '-h', '127.0.0.1', '-uroot', '-p${DB_ROOT_PASSWORD}']
+            interval: 10s
+            timeout: 5s
+            retries: 10
+            start_period: 30s
+
+    # ── Redis (cache, sessions, queue) ──────────────────────────────
+    redis:
+        image: 'redis:7-alpine'
+        container_name: kozy-redis
+        restart: unless-stopped
+        command:
+            - redis-server
+            - '--appendonly'
+            - 'yes'
+            - '--requirepass'
+            - '${REDIS_PASSWORD:?REDIS_PASSWORD is required}'
+        ports:
+            - '127.0.0.1:${FORWARD_REDIS_PORT:-6381}:6379'
+        environment:
+            REDIS_PASSWORD: '${REDIS_PASSWORD}'
+        volumes:
+            - 'kozy-redis:/data'
+        networks:
+            - kozy
+        healthcheck:
+            test: ['CMD-SHELL', 'redis-cli -a "$$REDIS_PASSWORD" ping | grep -q PONG']
+            interval: 10s
+            timeout: 5s
+            retries: 5
+
+networks:
+    kozy:
+        driver: bridge
+
+volumes:
+    kozy-mysql:
+        driver: local
+    kozy-redis:
+        driver: local
+    kozy-mail-data:
+        driver: local
+    kozy-mail-state:
+        driver: local
+    kozy-mail-logs:
+        driver: local
+    kozy-mail-config:
+        driver: local
+COMPOSE_EOF
+}
+
+write_env_template() {
+    cat <<'ENV_EOF'
+# ═══════════════════════════════════════════════════════════════════
+# kozy — production environment (generated by deploy.sh)
+# __GENERATE__ placeholders were filled with random secrets at setup.
+# __SET_ME__ values still need a human.
+# ═══════════════════════════════════════════════════════════════════
+
+APP_NAME="Kozy"
+APP_ENV=production
+APP_KEY=
+APP_DEBUG=false
+APP_TIMEZONE=UTC
+APP_URL=https://kozy.ryndia.space
+
+# Nginx terminates TLS on the host and proxies over the loopback.
+TRUSTED_PROXIES=*
+
+APP_LOCALE=en
+APP_FALLBACK_LOCALE=en
+APP_FAKER_LOCALE=en_US
+APP_MAINTENANCE_DRIVER=file
+BCRYPT_ROUNDS=12
+
+# ── Logging ────────────────────────────────────────────────────────
+LOG_CHANNEL=stack
+LOG_STACK=daily
+LOG_DEPRECATIONS_CHANNEL=null
+LOG_LEVEL=error
+
+# ── Database (MySQL container) ─────────────────────────────────────
+DB_CONNECTION=mysql
+DB_HOST=mysql
+DB_PORT=3306
+DB_DATABASE=kozy
+DB_USERNAME=kozy
+DB_PASSWORD=__GENERATE__
+# Container root account, used by the healthcheck and by backups.
+DB_ROOT_PASSWORD=__GENERATE__
+
+# ── Redis ──────────────────────────────────────────────────────────
+REDIS_CLIENT=phpredis
+REDIS_HOST=redis
+REDIS_PORT=6379
+REDIS_PASSWORD=__GENERATE__
+REDIS_PREFIX=kozy_database_
+
+# ── Session / cache / queue ────────────────────────────────────────
+SESSION_DRIVER=redis
+SESSION_LIFETIME=120
+SESSION_ENCRYPT=false
+SESSION_PATH=/
+# Host-scoped on purpose — do not share cookies with other *.ryndia.space apps.
+SESSION_DOMAIN=kozy.ryndia.space
+SESSION_SECURE_COOKIE=true
+SESSION_SAME_SITE=lax
+
+CACHE_STORE=redis
+CACHE_PREFIX=kozy_
+QUEUE_CONNECTION=redis
+BROADCAST_CONNECTION=log
+
+# Uploads explicitly target the "public" disk (Filament + PropertyImage),
+# so this only affects code asking for the default disk.
+FILESYSTEM_DISK=local
+
+# ── Mail: OTP delivery via the `mailserver` container ──────────────
+# The app submits on the internal Docker network: port 25, no auth,
+# authorised by PERMIT_DOCKER=network. No TLS certificate is needed for
+# that hop; the mail server negotiates TLS itself when relaying outward.
+MAIL_MAILER=smtp
+MAIL_SCHEME=smtp
+MAIL_HOST=mailserver
+MAIL_PORT=25
+MAIL_USERNAME=null
+MAIL_PASSWORD=null
+MAIL_ENCRYPTION=null
+MAIL_FROM_ADDRESS="noreply@kozy.ryndia.space"
+MAIL_FROM_NAME="Kozy"
+
+# ── Mail server container ──────────────────────────────────────────
+# The sending domain. It needs SPF, DKIM and DMARC records, plus a PTR
+# on the VPS IP — `./deploy.sh mail` prints exactly what to add.
+MAIL_DOMAIN=kozy.ryndia.space
+MAIL_HOSTNAME=mail.kozy.ryndia.space
+MAIL_POSTMASTER=postmaster@kozy.ryndia.space
+
+# Mailbox created at setup: needed for IMAP access and for authenticated
+# submission on :587 if you ever move off the internal :25 hop.
+MAIL_ACCOUNT=noreply@kozy.ryndia.space
+MAIL_ACCOUNT_PASSWORD=__GENERATE__
+
+# Send-only by default: loopback-bound high ports, so this stack cannot
+# collide with the mail server already using 25/465/587/993 for
+# visual.ryndia.space. For a full MTA on a host where those are free:
+# 0.0.0.0:25 / :465 / :587 / :993, MAIL_SSL_TYPE=letsencrypt, filters on.
+MAIL_BIND_SMTP=127.0.0.1:2525
+MAIL_BIND_SMTPS=127.0.0.1:4465
+MAIL_BIND_SUBMISSION=127.0.0.1:5587
+MAIL_BIND_IMAPS=127.0.0.1:9993
+MAIL_SSL_TYPE=
+MAIL_ENABLE_RSPAMD=0
+MAIL_ENABLE_FAIL2BAN=0
+
+# Optional smarthost. Leave empty to deliver directly from this VPS.
+MAIL_RELAY_HOST=
+MAIL_RELAY_PORT=587
+MAIL_RELAY_USER=
+MAIL_RELAY_PASSWORD=
+
+# ── Stripe ─────────────────────────────────────────────────────────
+# Leave empty to settle bookings manually instead of charging cards.
+# STRIPE_KEY is compiled into the JS bundle via VITE_STRIPE_KEY — after
+# changing it, rebuild assets (./deploy.sh), not just the config cache.
+STRIPE_KEY=__SET_ME__
+STRIPE_SECRET=__SET_ME__
+STRIPE_WEBHOOK_SECRET=__SET_ME__
+
+# ── AWS / S3 (optional) ────────────────────────────────────────────
+AWS_ACCESS_KEY_ID=
+AWS_SECRET_ACCESS_KEY=
+AWS_DEFAULT_REGION=us-east-1
+AWS_BUCKET=
+AWS_USE_PATH_STYLE_ENDPOINT=false
+
+VITE_APP_NAME="${APP_NAME}"
+VITE_STRIPE_KEY="${STRIPE_KEY}"
+
+# ── Docker / Sail runtime ──────────────────────────────────────────
+# Ports are offset from visual.ryndia.space (8080/3307/6380) so both
+# stacks share the VPS without colliding.
+WWWGROUP=1000
+WWWUSER=1000
+APP_PORT=8081
+FORWARD_DB_PORT=3308
+FORWARD_REDIS_PORT=6381
+ENV_EOF
+}
+
+write_nginx_conf() {
+    cat > "$NGINX_CONF" <<'NGINX_EOF'
+# GENERATED BY deploy.sh — install with: ./deploy.sh nginx
+# Reverse proxy for kozy.ryndia.space → the app container on 127.0.0.1:8081
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name kozy.ryndia.space;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    location / {
+        return 301 https://$server_name$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name kozy.ryndia.space;
+
+    ssl_certificate /etc/letsencrypt/live/kozy.ryndia.space/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/kozy.ryndia.space/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+    # ── Security headers ───────────────────────────────────────────
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+    # Stripe.js needs js.stripe.com (script + frame) and api.stripe.com
+    # (connect); Inertia/React and Filament/Livewire need inline+eval;
+    # fonts come from Bunny Fonts (laravel-vite-plugin/fonts).
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://js.stripe.com; script-src-elem 'self' 'unsafe-inline' https://js.stripe.com; style-src 'self' 'unsafe-inline' https://fonts.bunny.net; font-src 'self' data: https://fonts.bunny.net; img-src 'self' data: blob: https:; connect-src 'self' https://api.stripe.com; frame-src 'self' https://js.stripe.com https://hooks.stripe.com; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self';" always;
+
+    access_log /var/log/nginx/kozy.ryndia.space-access.log;
+    error_log  /var/log/nginx/kozy.ryndia.space-error.log;
+
+    # Property photo galleries.
+    client_max_body_size 100M;
+
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_types text/plain text/css text/javascript application/javascript application/json application/xml image/svg+xml;
+
+    location / {
+        proxy_pass http://127.0.0.1:8081;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port $server_port;
+
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 120s;
+        # dompdf receipts can be slow on large bookings.
+        proxy_read_timeout 120s;
+        proxy_buffering off;
+    }
+
+    # Health endpoint — kept out of the access log.
+    location = /up {
+        access_log off;
+        proxy_pass http://127.0.0.1:8081;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location ~ /\.(?!well-known) {
+        deny all;
+    }
+}
+NGINX_EOF
+}
+
+# ═══════════════════════════════════════════════════════════════════
+#  Building blocks
+# ═══════════════════════════════════════════════════════════════════
+
+check_prerequisites() {
+    command -v docker >/dev/null 2>&1 || fail "Docker is not installed"
+    docker compose version >/dev/null 2>&1 || fail "Docker Compose plugin is not installed"
+    docker info >/dev/null 2>&1 || fail "Cannot reach the Docker daemon — is this user in the 'docker' group?"
+    command -v openssl >/dev/null 2>&1 || fail "openssl is required (secret generation)"
+    [ -f artisan ] || fail "No artisan file here — run this from the project root"
+}
+
+assert_production_env() {
+    [ -f .env ] || return 0
+    grep -qE "^APP_ENV=production" .env && return 0
+    [ "$ALLOW_NON_PRODUCTION" = true ] && { warn "APP_ENV is not 'production' — continuing (--allow-non-production)"; return 0; }
+    echo ""
+    fail "This .env is not a production environment (APP_ENV=$(env_value APP_ENV)).
+      Refusing to run the production stack against it — migrations would hit the
+      wrong database. Move it aside (mv .env .env.local) and re-run to generate a
+      production .env, or pass --allow-non-production if you really mean it."
+}
+
+create_env_file() {
+    if [ -f .env ]; then
+        grep -qE "^DB_CONNECTION=mysql" .env || warn "DB_CONNECTION is not 'mysql' in .env"
+        ok ".env already exists — left untouched"
+        return
+    fi
+
+    write_env_template > .env
+
+    # One distinct random secret per placeholder. Alphanumeric only: these
+    # land in .env, in compose interpolation and in CLI flags, where
+    # punctuation causes quoting grief.
+    while grep -q "__GENERATE__" .env; do
+        secret="$(openssl rand -base64 48 | tr -dc 'A-Za-z0-9' | cut -c1-32)"
+        awk -v s="$secret" '
+            BEGIN { done = 0 }
+            !done && index($0, "__GENERATE__") { sub(/__GENERATE__/, s); done = 1 }
+            { print }
+        ' .env > .env.tmp && mv .env.tmp .env
+    done
+
+    chmod 600 .env
+    ok "Wrote .env with generated DB / Redis / mailbox secrets (chmod 600)"
+    warn "Fill in the __SET_ME__ values (Stripe) before taking payments"
+}
+
+bootstrap_composer() {
+    # Sail's Dockerfile lives inside vendor/, so dependencies must exist
+    # before the image can be built. sail is a require-dev package, hence
+    # the full install here; dev packages are stripped inside the container.
+    if [ -d vendor/laravel/sail/runtimes/8.4 ]; then
+        ok "vendor/laravel/sail present — skipping host bootstrap"
+        return
+    fi
+    docker run --rm \
+        -u "$(id -u):$(id -g)" \
+        -v "$PROJECT_DIR:/var/www/html" \
+        -w /var/www/html \
+        laravelsail/php84-composer:latest \
+        composer install --no-interaction --ignore-platform-reqs
+    [ -d vendor/laravel/sail/runtimes/8.4 ] || fail "Composer bootstrap failed — vendor/laravel/sail missing"
+    ok "Composer dependencies installed"
+}
+
+wait_for_health() {
+    local container="$1" label="$2" tries="${3:-40}" state=""
+    for _ in $(seq 1 "$tries"); do
+        state="$(docker inspect -f '{{.State.Health.Status}}' "$container" 2>/dev/null || echo starting)"
+        [ "$state" = "healthy" ] && { ok "$label is healthy"; return 0; }
+        sleep 3
+    done
+    fail "$label never became healthy — check: ./deploy.sh logs ${container#kozy-}"
+}
+
+mail_smtp_ready() {
+    # `postfix status` is unreliable in this image — probe the socket that
+    # actually matters instead (same check as the container healthcheck).
+    compose exec -T mailserver bash -c 'ss --listening --tcp | grep -qP "LISTEN.+:smtp"' >/dev/null 2>&1
+}
+
+wait_for_mail() {
+    local tries="${1:-40}"
+    for _ in $(seq 1 "$tries"); do
+        mail_smtp_ready && return 0
+        sleep 5
+    done
+    return 1
+}
+
+fix_permissions() {
+    run_as_root chown -R sail:sail /var/www/html/vendor 2>/dev/null || true
+    run_as_root chown -R sail:sail /var/www/html/storage /var/www/html/bootstrap/cache 2>/dev/null || true
+    run_as_root chmod -R 775 /var/www/html/storage /var/www/html/bootstrap/cache 2>/dev/null || true
+    run_as_root mkdir -p /var/www/html/storage/logs 2>/dev/null || true
+    run_as_root touch /var/www/html/storage/logs/laravel.log 2>/dev/null || true
+    run_as_root chown sail:sail /var/www/html/storage/logs/laravel.log 2>/dev/null || true
+}
+
+backup_database() {
+    mkdir -p "$BACKUP_DIR"
+    local db_name db_root_pw stamp backup_file
+    db_name="$(env_value DB_DATABASE)"
+    db_root_pw="$(env_value DB_ROOT_PASSWORD)"
+    stamp="$(date +%Y%m%d-%H%M%S)"
+    backup_file="$BACKUP_DIR/kozy-$stamp.sql.gz"
+
+    if compose exec -T mysql mysqldump \
+            -uroot -p"$db_root_pw" \
+            --single-transaction --quick --routines --events \
+            "$db_name" 2>/dev/null | gzip > "$backup_file"; then
+        ok "Saved $(basename "$backup_file") ($(du -h "$backup_file" | cut -f1))"
+        ls -1t "$BACKUP_DIR"/kozy-*.sql.gz 2>/dev/null | tail -n +$((BACKUP_KEEP + 1)) | xargs -r rm --
+        ok "Retention: newest $BACKUP_KEEP dumps kept"
+        return 0
+    fi
+    rm -f "$backup_file"
+    return 1
+}
+
+build_frontend() {
+    info "Installing NPM dependencies..."
+    run_in_container npm ci
+    ok "NPM dependencies installed"
+
+    info "Building frontend assets (Vite + Inertia + Wayfinder)..."
+    run_in_container npm run build
+    ok "Assets built into public/build"
+
+    info "Publishing Filament assets..."
+    run_in_container php artisan filament:assets
+    ok "Filament assets published"
+}
+
+optimize_app() {
+    run_in_container php artisan optimize:clear
+    run_in_container php artisan optimize
+    ok "Config, routes, views and events cached"
+}
+
+health_checks() {
+    local app_port
+    app_port="$(env_value APP_PORT)"; app_port="${app_port:-8081}"
+
+    if curl -fsS --max-time 10 "http://127.0.0.1:${app_port}/up" >/dev/null; then
+        ok "Local health check passed (127.0.0.1:${app_port}/up)"
+    else
+        warn "Local health check FAILED — inspect: ./deploy.sh logs app"
+    fi
+
+    if curl -fsS --max-time 10 -o /dev/null "https://${APP_DOMAIN}/up"; then
+        ok "Public health check passed (https://${APP_DOMAIN}/up)"
+    else
+        warn "Public health check failed — Nginx/TLS/DNS, not necessarily the app"
+    fi
+
+    if mail_smtp_ready; then
+        ok "Mail server accepting SMTP ($(compose exec -T mailserver mailq 2>/dev/null | tail -1 | tr -d '\r' || echo 'queue unknown'))"
+        if compose exec -T mailserver test -s /etc/opendkim/SigningTable 2>/dev/null; then
+            ok "DKIM signing active"
+        else
+            warn "DKIM is NOT active — OTP mail will be unsigned. Run: ./deploy.sh mail"
+        fi
+    else
+        warn "Mail server is NOT accepting SMTP — OTP email will fail. See: ./deploy.sh mail"
+    fi
+}
+
+# ═══════════════════════════════════════════════════════════════════
+#  Mail server: mailbox, DKIM keys, DNS records
+# ═══════════════════════════════════════════════════════════════════
+
+cmd_mail() {
+    title "Mail server — OTP delivery"
+
+    local mail_domain mail_account mail_password mail_hostname public_ip
+    mail_domain="$(env_value MAIL_DOMAIN)";     mail_domain="${mail_domain:-$APP_DOMAIN}"
+    mail_hostname="$(env_value MAIL_HOSTNAME)"; mail_hostname="${mail_hostname:-mail.$APP_DOMAIN}"
+    mail_account="$(env_value MAIL_ACCOUNT)";   mail_account="${mail_account:-noreply@$mail_domain}"
+    mail_password="$(env_value MAIL_ACCOUNT_PASSWORD)"
+
+    info "Waiting for the mail server to finish initialising..."
+    wait_for_mail || fail "Mail server did not start — check: ./deploy.sh logs mailserver"
+    ok "Postfix is accepting SMTP on $mail_hostname"
+
+    # ── Mailbox ────────────────────────────────────────────────────
+    info "Ensuring the sending mailbox exists..."
+    if compose exec -T mailserver setup email list 2>/dev/null | grep -q "$mail_account"; then
+        ok "Mailbox $mail_account already exists"
+    else
+        if compose exec -T mailserver setup email add "$mail_account" "$mail_password" >/dev/null 2>&1; then
+            ok "Mailbox created: $mail_account"
+        else
+            warn "Could not create $mail_account — create it manually:"
+            warn "  ./deploy.sh shell mailserver → setup email add $mail_account"
+        fi
+    fi
+
+    # ── DKIM ───────────────────────────────────────────────────────
+    info "Ensuring a DKIM key exists for $mail_domain..."
+    local dkim_file="/tmp/docker-mailserver/opendkim/keys/$mail_domain/mail.txt"
+    if compose exec -T mailserver test -f "$dkim_file" 2>/dev/null; then
+        ok "DKIM key already present — keeping it (regenerating would break DNS)"
+    else
+        compose exec -T mailserver setup config dkim domain "$mail_domain" >/dev/null 2>&1 \
+            || compose exec -T mailserver setup config dkim >/dev/null 2>&1 \
+            || warn "DKIM generation failed — run: ./deploy.sh shell mailserver → setup config dkim"
+        ok "DKIM key generated for $mail_domain"
+    fi
+
+    # Keys are written to the config volume, but OpenDKIM only picks up its
+    # signing tables when the container is recreated — a plain `restart`
+    # leaves /etc/opendkim empty and every message goes out UNSIGNED.
+    if ! compose exec -T mailserver test -s /etc/opendkim/SigningTable 2>/dev/null; then
+        info "Loading the DKIM signing table (recreating the mail server)..."
+        compose up -d --force-recreate mailserver >/dev/null 2>&1 || true
+        wait_for_mail || warn "Mail server slow to come back — check: ./deploy.sh logs mailserver"
+    fi
+
+    if compose exec -T mailserver test -s /etc/opendkim/SigningTable 2>/dev/null; then
+        ok "OpenDKIM is signing for $(compose exec -T mailserver cat /etc/opendkim/SigningTable 2>/dev/null | awk '{print $1}' | tr '\n' ' ')"
+    else
+        warn "OpenDKIM has no signing table — mail will go out unsigned and land in spam"
+        warn "  Try: ./deploy.sh shell mailserver → setup config dkim domain $mail_domain"
+    fi
+
+    # ── Reachability from the app ──────────────────────────────────
+    info "Checking the app can submit mail..."
+    if run_in_container php -r 'exit(@fsockopen("mailserver", 25, $e, $s, 5) ? 0 : 1);' 2>/dev/null; then
+        ok "kozy-app can reach mailserver:25"
+    else
+        warn "kozy-app CANNOT reach mailserver:25 — OTP mail will fail"
+    fi
+
+    # ── DNS records ────────────────────────────────────────────────
+    public_ip="$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || echo 'YOUR_VPS_IP')"
+
+    local host_name domain_name
+    host_name="$(dns_name "$mail_hostname")"
+    domain_name="$(dns_name "$mail_domain")"
+
+    echo ""
+    echo -e "${YELLOW}DNS records required for OTP mail to be delivered${NC}"
+    echo -e "  (Cloudflare, ryndia.space zone — mail records must be ${YELLOW}DNS only, grey cloud${NC})"
+    echo ""
+    printf "  %-5s %-22s → %s\n" "A"   "$host_name"            "$public_ip"
+    printf "  %-5s %-22s → %s\n" "TXT" "$domain_name"          "\"v=spf1 a mx ip4:$public_ip -all\""
+    printf "  %-5s %-22s → %s\n" "TXT" "_dmarc.$domain_name"   "\"v=DMARC1; p=none; rua=mailto:$mail_account\""
+    printf "  %-5s %-22s → %s\n" "MX"  "$domain_name"          "$mail_hostname (priority 10) — only if you enable inbound mail"
+    echo ""
+    echo "  PTR (reverse DNS), set at your VPS provider:"
+    printf "  %-5s %-22s → %s\n" "PTR" "$public_ip"            "$mail_hostname"
+    echo ""
+    echo "  DMARC starts at p=none because this stack is send-only: with no MX"
+    echo "  there is no inbox to receive the reports. Tighten to p=quarantine"
+    echo "  once you have watched delivery for a week (or point rua at a"
+    echo "  mailbox you can actually read)."
+    echo ""
+    echo -e "${YELLOW}DKIM record${NC} (name: mail._domainkey.$domain_name)"
+    compose exec -T mailserver cat "$dkim_file" 2>/dev/null | sed 's/^/    /' \
+        || warn "DKIM record not found at $dkim_file"
+    echo ""
+    echo "  Verify once published:"
+    echo "    dig TXT $mail_domain +short"
+    echo "    dig TXT mail._domainkey.$mail_domain +short"
+    echo "    dig TXT _dmarc.$mail_domain +short"
+    echo ""
+    echo "  Send a test OTP-style mail:"
+    echo "    ./deploy.sh artisan tinker"
+    echo "    >>> Mail::raw('OTP test', fn (\$m) => \$m->to('you@gmail.com')->subject('Kozy'));"
+    echo "    ./deploy.sh logs mailserver     # watch it leave"
+    echo ""
+    warn "A brand-new IP has no sending reputation. If test mail lands in spam"
+    warn "or is rejected, set MAIL_RELAY_HOST/USER/PASSWORD in .env to relay"
+    warn "through a provider, then: ./deploy.sh (the stack picks it up)."
+}
+
+# ═══════════════════════════════════════════════════════════════════
+#  Nginx + TLS
+# ═══════════════════════════════════════════════════════════════════
+
+cmd_nginx() {
+    title "Nginx + TLS for $APP_DOMAIN"
+
+    command -v nginx >/dev/null 2>&1 || fail "Nginx is not installed (sudo apt install nginx)"
+    command -v certbot >/dev/null 2>&1 || warn "certbot not found — install: sudo apt install certbot python3-certbot-nginx"
+
+    write_nginx_conf
+    ok "Generated $NGINX_CONF"
+
+    sudo mkdir -p /var/www/certbot
+
+    if [ ! -f "/etc/letsencrypt/live/$APP_DOMAIN/fullchain.pem" ]; then
+        info "No certificate yet — installing a temporary HTTP-only vhost first..."
+        sudo tee "/etc/nginx/sites-available/$APP_DOMAIN" >/dev/null <<HTTP_EOF
+server {
+    listen 80;
+    listen [::]:80;
+    server_name $APP_DOMAIN;
+    location /.well-known/acme-challenge/ { root /var/www/certbot; }
+    location / { return 200 'kozy: awaiting certificate'; add_header Content-Type text/plain; }
+}
+HTTP_EOF
+        sudo ln -sf "/etc/nginx/sites-available/$APP_DOMAIN" "/etc/nginx/sites-enabled/$APP_DOMAIN"
+        sudo nginx -t && sudo systemctl reload nginx
+        ok "Temporary vhost live — requesting the certificate"
+
+        sudo certbot certonly --webroot -w /var/www/certbot -d "$APP_DOMAIN" \
+            || fail "Certbot failed — check DNS for $APP_DOMAIN and port 80 reachability"
+        ok "Certificate obtained"
+    else
+        ok "Certificate already exists for $APP_DOMAIN"
+    fi
+
+    info "Installing the full TLS vhost..."
+    sudo cp "$NGINX_CONF" "/etc/nginx/sites-available/$APP_DOMAIN"
+    sudo ln -sf "/etc/nginx/sites-available/$APP_DOMAIN" "/etc/nginx/sites-enabled/$APP_DOMAIN"
+    sudo nginx -t || fail "nginx -t failed — the vhost was not activated cleanly"
+    sudo systemctl reload nginx
+    ok "Nginx reloaded — https://$APP_DOMAIN is served"
+
+    echo ""
+    echo "  Optional, for a mail-server certificate (needed only if you expose"
+    echo "  submission/IMAP publicly):  sudo certbot certonly --nginx -d $(env_value MAIL_HOSTNAME)"
+    echo "  then set MAIL_SSL_TYPE=letsencrypt in .env and re-run ./deploy.sh"
+}
+
+# ═══════════════════════════════════════════════════════════════════
+#  First-run setup
+# ═══════════════════════════════════════════════════════════════════
+
+cmd_setup() {
+    title "First-time setup — $APP_DOMAIN"
+    echo "  Project: $PROJECT_DIR"
+
+    info "Checking prerequisites..."
+    check_prerequisites
+    ok "Docker $(docker --version | cut -d' ' -f3 | tr -d ,), Compose $(docker compose version --short)"
+
+    info "Writing the environment file..."
+    create_env_file
+    assert_production_env
+
+    info "Generating the Docker stack definition..."
+    write_compose_file
+    ok "Wrote $COMPOSE_FILE"
+
+    info "Bootstrapping Composer on the host..."
+    bootstrap_composer
+
+    info "Building images and starting containers..."
+    compose up -d --build
+    ok "Containers starting"
+
+    info "Waiting for services..."
+    wait_for_health kozy-mysql "MySQL"
+    wait_for_health kozy-redis "Redis"
+
+    info "Fixing ownership and permissions..."
+    fix_permissions
+    ok "storage/ and bootstrap/cache writable by sail"
+
+    info "Installing production Composer dependencies..."
+    run_in_container composer install --optimize-autoloader --no-dev --no-interaction
+    ok "Dependencies installed (no dev)"
+
+    info "Generating the application key..."
+    if grep -qE "^APP_KEY=$" .env; then
+        run_in_container php artisan key:generate --force
+        ok "APP_KEY generated"
+    else
+        ok "APP_KEY already set"
+    fi
+
+    info "Running database migrations..."
+    run_in_container php artisan migrate --force
+    ok "Migrations applied"
+
+    info "Linking storage (property images)..."
+    run_in_container php artisan storage:link >/dev/null 2>&1 || true
+    ok "public/storage → storage/app/public"
+
+    build_frontend
+
+    info "Optimising Laravel..."
+    optimize_app
+
+    info "Final permissions pass..."
+    fix_permissions
+    run_as_root chown -R sail:sail /var/www/html/public/build 2>/dev/null || true
+    ok "Permissions locked down"
+
+    cmd_mail
+
+    # ── Admin account ──────────────────────────────────────────────
+    info "Back-office admin account..."
+    if [ -t 0 ]; then
+        read -r -p "  Create an admin account now? [Y/n] " create_admin
+        create_admin="${create_admin:-Y}"
+        if [[ "$create_admin" =~ ^[Yy]$ ]]; then
+            read -r -p "  Name: " admin_name
+            read -r -p "  Email: " admin_email
+            read -r -s -p "  Password: " admin_password; echo ""
+            if compose exec -T app php artisan make:admin "$admin_name" \
+                    --email="$admin_email" --password="$admin_password"; then
+                ok "Admin created"
+            else
+                warn "Admin creation failed — retry with: ./deploy.sh artisan make:admin \"Name\" --email=..."
+            fi
+        else
+            warn "Skipped — create one with: ./deploy.sh artisan make:admin \"Name\" --email=..."
+        fi
+    else
+        warn "Non-interactive — create one with: ./deploy.sh artisan make:admin \"Name\" --email=..."
+    fi
+
+    health_checks
+
+    echo ""
+    title "Setup complete"
+    echo ""
+    echo "  Site:   https://$APP_DOMAIN"
+    echo "  Admin:  https://$APP_DOMAIN/admin"
+    echo "  Health: https://$APP_DOMAIN/up"
+    echo ""
+    echo -e "${YELLOW}Remaining:${NC}"
+    echo "  1. Nginx + TLS:        ./deploy.sh nginx"
+    echo "  2. Publish the DNS records printed above (SPF, DKIM, DMARC, PTR)"
+    echo "  3. Fill the __SET_ME__ Stripe keys in .env, then: ./deploy.sh"
+    echo "  4. Deploy changes from here on with: ./deploy.sh"
+    echo ""
+}
+
+# ═══════════════════════════════════════════════════════════════════
+#  Deploy
+# ═══════════════════════════════════════════════════════════════════
+
 MAINTENANCE_ON=false
 cleanup() {
     local code=$?
@@ -71,163 +980,204 @@ cleanup() {
     fi
     if [ $code -ne 0 ]; then
         echo -e "\n${RED}Deployment failed (exit $code).${NC}"
-        echo "  Logs: docker compose -f $COMPOSE_FILE logs --tail=100"
+        echo "  Logs: ./deploy.sh logs app"
     fi
 }
-trap cleanup EXIT
 
-# ── Step 1: Pull latest code ───────────────────────────────────────
-if [ "$DO_PULL" = true ]; then
-    info "Pulling latest changes..."
-    if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-        target_branch="${BRANCH:-$(git branch --show-current)}"
-        git pull origin "$target_branch"
-        ok "Pulled origin/$target_branch @ $(git rev-parse --short HEAD)"
+cmd_deploy() {
+    title "Deploying $APP_DOMAIN"
+    check_prerequisites
+    [ -f .env ] || fail ".env not found — run ./deploy.sh setup first"
+    assert_production_env
+
+    trap cleanup EXIT
+
+    # ── Code ───────────────────────────────────────────────────────
+    if [ "$DO_PULL" = true ]; then
+        info "Pulling latest changes..."
+        if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+            local branch remote
+            branch="${BRANCH:-$(git branch --show-current)}"
+            remote="$(git config "branch.$branch.remote" 2>/dev/null || git remote | head -1)"
+            if [ -n "$remote" ]; then
+                git pull "$remote" "$branch"
+                ok "Pulled $remote/$branch @ $(git rev-parse --short HEAD)"
+            else
+                warn "No git remote configured — skipping pull"
+            fi
+        else
+            warn "Not a git repository — deploying the files already here"
+        fi
     else
-        warn "Not a git repository — skipping pull (deploy the files you rsynced)"
+        info "Skipping git pull (--no-pull)"
     fi
-else
-    info "Skipping git pull (--no-pull)"
-fi
 
-# ── Step 2: Ensure the stack is running ────────────────────────────
-info "Ensuring containers are up to date..."
-compose up -d --build --remove-orphans
-ok "Containers running"
+    # ── Stack ──────────────────────────────────────────────────────
+    info "Regenerating the stack definition..."
+    write_compose_file
+    write_nginx_conf
+    ok "$COMPOSE_FILE and $NGINX_CONF refreshed from deploy.sh"
 
-info "Waiting for MySQL to be healthy..."
-for i in $(seq 1 40); do
-    state="$(docker inspect -f '{{.State.Health.Status}}' kozy-mysql 2>/dev/null || echo starting)"
-    [ "$state" = "healthy" ] && break
-    sleep 3
-done
-[ "${state:-}" = "healthy" ] || fail "MySQL not healthy — check: docker compose -f $COMPOSE_FILE logs mysql"
-ok "MySQL healthy"
+    info "Starting / updating containers..."
+    compose up -d --build --remove-orphans
+    ok "Containers running"
+    wait_for_health kozy-mysql "MySQL"
 
-# ── Step 3: Back up the database before touching it ────────────────
-if [ "$DO_BACKUP" = true ]; then
+    # ── Backup ─────────────────────────────────────────────────────
+    if [ "$DO_BACKUP" = true ]; then
+        info "Backing up the database..."
+        backup_database || fail "Backup failed — aborting before migrations (override with --no-backup)"
+    else
+        info "Skipping database backup (--no-backup)"
+    fi
+
+    # ── Maintenance ────────────────────────────────────────────────
+    if [ "$DO_MAINTENANCE" = true ]; then
+        info "Enabling maintenance mode..."
+        run_in_container php artisan down --retry=15 >/dev/null 2>&1 || true
+        MAINTENANCE_ON=true
+        ok "Site is in maintenance mode"
+    fi
+
+    info "Fixing permissions..."
+    fix_permissions
+    ok "Permissions set"
+
+    info "Installing Composer dependencies (no dev)..."
+    run_in_container composer install --optimize-autoloader --no-dev --no-interaction
+    ok "Dependencies up to date"
+
+    info "Running database migrations..."
+    run_in_container php artisan migrate --force
+    ok "Migrations applied"
+
+    if [ "$DO_ASSETS" = true ]; then
+        build_frontend
+    else
+        info "Skipping frontend build (--no-assets)"
+    fi
+
+    info "Verifying the storage symlink..."
+    run_in_container php artisan storage:link >/dev/null 2>&1 || true
+    ok "public/storage in place"
+
+    info "Rebuilding caches..."
+    optimize_app
+
+    info "Final permissions pass..."
+    fix_permissions
+    run_as_root chown -R sail:sail /var/www/html/public/build 2>/dev/null || true
+    ok "Permissions locked down"
+
+    info "Restarting queue worker and scheduler..."
+    run_in_container php artisan queue:restart >/dev/null 2>&1 || true
+    compose restart queue scheduler >/dev/null
+    ok "Workers restarted"
+
+    if [ "$MAINTENANCE_ON" = true ]; then
+        info "Lifting maintenance mode..."
+        run_in_container php artisan up
+        MAINTENANCE_ON=false
+        ok "Site is live"
+    fi
+
+    info "Health checks..."
+    health_checks
+
+    compose ps --format "table {{.Name}}\t{{.Status}}"
+
+    echo ""
+    title "Deployment complete"
+    echo ""
+    echo "  Site:  https://$APP_DOMAIN"
+    echo "  Admin: https://$APP_DOMAIN/admin"
+    echo "  Logs:  ./deploy.sh logs app"
+    echo ""
+}
+
+# ═══════════════════════════════════════════════════════════════════
+#  Small commands
+# ═══════════════════════════════════════════════════════════════════
+
+cmd_status() {
+    [ -f "$COMPOSE_FILE" ] || write_compose_file
+    compose ps --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}"
+    echo ""
+    health_checks
+}
+
+cmd_backup() {
     info "Backing up the database..."
-    mkdir -p "$BACKUP_DIR"
-    db_name="$(grep -E '^DB_DATABASE=' .env | cut -d= -f2-)"
-    db_root_pw="$(grep -E '^DB_ROOT_PASSWORD=' .env | cut -d= -f2-)"
-    stamp="$(date +%Y%m%d-%H%M%S)"
-    backup_file="$BACKUP_DIR/kozy-$stamp.sql.gz"
+    backup_database || fail "Backup failed — is MySQL running? ./deploy.sh status"
+}
 
-    if compose exec -T mysql mysqldump \
-            -uroot -p"$db_root_pw" \
-            --single-transaction --quick --routines --events \
-            "$db_name" 2>/dev/null | gzip > "$backup_file"; then
-        ok "Saved $(basename "$backup_file") ($(du -h "$backup_file" | cut -f1))"
-        # Keep only the newest $BACKUP_KEEP dumps.
-        ls -1t "$BACKUP_DIR"/kozy-*.sql.gz 2>/dev/null | tail -n +$((BACKUP_KEEP + 1)) | xargs -r rm --
-        ok "Retention: newest $BACKUP_KEEP dumps kept"
-    else
-        rm -f "$backup_file"
-        fail "Database backup failed — aborting before migrations (use --no-backup to override)"
-    fi
-else
-    info "Skipping database backup (--no-backup)"
+show_help() { sed -n '2,32p' "$0"; }
+
+# ═══════════════════════════════════════════════════════════════════
+#  Dispatch
+# ═══════════════════════════════════════════════════════════════════
+
+DO_PULL=true
+DO_ASSETS=true
+DO_BACKUP=true
+DO_MAINTENANCE=true
+ALLOW_NON_PRODUCTION=false
+BRANCH=""
+
+COMMAND="deploy"
+if [ $# -gt 0 ]; then
+    case "$1" in
+        setup|mail|nginx|backup|status|logs|artisan|shell|help) COMMAND="$1"; shift ;;
+        -h|--help) COMMAND="help"; shift ;;
+    esac
 fi
 
-# ── Step 4: Maintenance mode ───────────────────────────────────────
-if [ "$DO_MAINTENANCE" = true ]; then
-    info "Enabling maintenance mode..."
-    run_in_container php artisan down --retry=15 >/dev/null 2>&1 || true
-    MAINTENANCE_ON=true
-    ok "Site is in maintenance mode"
-fi
+case "$COMMAND" in
+    logs)
+        [ -f .env ] || fail ".env not found — run ./deploy.sh setup first"
+        compose logs -f "${1:-app}"
+        ;;
+    artisan)
+        [ $# -gt 0 ] || fail "Usage: ./deploy.sh artisan <command> [args]"
+        compose exec app php artisan "$@"
+        ;;
+    shell)
+        compose exec "${1:-app}" bash
+        ;;
+    help)
+        show_help
+        ;;
+    *)
+        # Deploy-time flags
+        for arg in "$@"; do
+            case "$arg" in
+                --no-pull)        DO_PULL=false ;;
+                --no-assets)      DO_ASSETS=false ;;
+                --no-backup)      DO_BACKUP=false ;;
+                --no-maintenance) DO_MAINTENANCE=false ;;
+                --branch=*)       BRANCH="${arg#*=}" ;;
+                --allow-non-production) ALLOW_NON_PRODUCTION=true ;;
+                *)                fail "Unknown option: $arg (try ./deploy.sh help)" ;;
+            esac
+        done
 
-# ── Step 5: Permissions (before writing anything) ──────────────────
-info "Fixing permissions..."
-run_as_root chown -R sail:sail /var/www/html/vendor 2>/dev/null || true
-run_as_root chown -R sail:sail /var/www/html/storage /var/www/html/bootstrap/cache 2>/dev/null || true
-run_as_root chmod -R 775 /var/www/html/storage /var/www/html/bootstrap/cache 2>/dev/null || true
-ok "Permissions set"
-
-# ── Step 6: Composer dependencies ──────────────────────────────────
-info "Installing Composer dependencies (no dev)..."
-run_in_container composer install --optimize-autoloader --no-dev --no-interaction
-ok "Composer dependencies up to date"
-
-# ── Step 7: Migrations ─────────────────────────────────────────────
-info "Running database migrations..."
-run_in_container php artisan migrate --force
-ok "Migrations applied"
-
-# ── Step 8: Frontend assets ────────────────────────────────────────
-if [ "$DO_ASSETS" = true ]; then
-    info "Installing NPM dependencies..."
-    run_in_container npm ci
-    ok "NPM dependencies installed"
-
-    info "Building frontend assets (Vite + Wayfinder + Inertia)..."
-    run_in_container npm run build
-    ok "Assets built into public/build"
-
-    info "Publishing Filament assets..."
-    run_in_container php artisan filament:assets
-    ok "Filament assets published"
-else
-    info "Skipping frontend build (--no-assets)"
-fi
-
-# ── Step 9: Storage symlink (no-op if it already exists) ───────────
-info "Verifying storage symlink..."
-run_in_container php artisan storage:link >/dev/null 2>&1 || true
-ok "public/storage in place"
-
-# ── Step 10: Rebuild caches ────────────────────────────────────────
-info "Clearing caches..."
-run_in_container php artisan optimize:clear
-ok "Caches cleared"
-
-info "Caching config, routes, views, events..."
-run_in_container php artisan optimize
-ok "Laravel optimized"
-
-# ── Step 11: Final permissions ─────────────────────────────────────
-info "Final permissions pass..."
-run_as_root chown -R sail:sail /var/www/html/storage /var/www/html/bootstrap/cache /var/www/html/public/build 2>/dev/null || true
-run_as_root chmod -R 775 /var/www/html/storage /var/www/html/bootstrap/cache
-ok "Permissions locked down"
-
-# ── Step 12: Restart workers so they pick up the new code ──────────
-info "Restarting queue worker and scheduler..."
-run_in_container php artisan queue:restart >/dev/null 2>&1 || true
-compose restart queue scheduler >/dev/null
-ok "Workers restarted"
-
-# ── Step 13: Back online ───────────────────────────────────────────
-if [ "$MAINTENANCE_ON" = true ]; then
-    info "Lifting maintenance mode..."
-    run_in_container php artisan up
-    MAINTENANCE_ON=false
-    ok "Site is live"
-fi
-
-# ── Step 14: Health check ──────────────────────────────────────────
-info "Health check..."
-app_port="$(grep -E '^APP_PORT=' .env | cut -d= -f2- || echo 8081)"
-if curl -fsS --max-time 10 "http://127.0.0.1:${app_port:-8081}/up" >/dev/null; then
-    ok "Local health check passed (127.0.0.1:${app_port:-8081}/up)"
-else
-    warn "Local health check FAILED — inspect: docker compose -f $COMPOSE_FILE logs --tail=100 app"
-fi
-
-if curl -fsS --max-time 10 -o /dev/null -w '%{http_code}' https://kozy.ryndia.space/up | grep -q 200; then
-    ok "Public health check passed (https://kozy.ryndia.space/up)"
-else
-    warn "Public health check failed — check Nginx/TLS, not necessarily the app"
-fi
-
-compose ps --format "table {{.Name}}\t{{.Status}}"
-
-echo ""
-echo -e "${GREEN}═══════════════════════════════════════════════════${NC}"
-echo -e "${GREEN}  Deployment completed successfully!${NC}"
-echo -e "${GREEN}═══════════════════════════════════════════════════${NC}"
-echo ""
-echo "  Site:   https://kozy.ryndia.space"
-echo "  Admin:  https://kozy.ryndia.space/admin"
-echo "  Logs:   docker compose -f $COMPOSE_FILE logs -f"
-echo ""
+        case "$COMMAND" in
+            setup)  cmd_setup ;;
+            mail)   [ -f .env ] || fail ".env not found — run ./deploy.sh setup first"
+                    [ -f "$COMPOSE_FILE" ] || write_compose_file
+                    cmd_mail ;;
+            nginx)  cmd_nginx ;;
+            backup) cmd_backup ;;
+            status) cmd_status ;;
+            deploy)
+                # First run on a fresh server → full setup, otherwise deploy.
+                if [ ! -f .env ] || ! docker inspect kozy-app >/dev/null 2>&1; then
+                    warn "No existing deployment detected — running first-time setup"
+                    cmd_setup
+                else
+                    cmd_deploy
+                fi
+                ;;
+        esac
+        ;;
+esac
