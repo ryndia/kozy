@@ -1,0 +1,50 @@
+# Git
+.git
+.gitignore
+.gitattributes
+.github
+
+# Node
+node_modules
+npm-debug.log
+yarn-error.log
+
+# Build artifacts
+public/hot
+public/storage
+public/build
+bootstrap/ssr
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+!.env.production.example
+auth.json
+
+# IDE
+.idea
+.vscode
+.zed
+.nova
+.fleet
+*.swp
+*.swo
+.DS_Store
+
+# Testing
+coverage
+.phpunit.result.cache
+.phpunit.cache
+
+# Logs, caches, backups
+storage/logs/*
+storage/backups/*
+storage/pail
+bootstrap/cache/*
+storage/framework/cache/*
+storage/framework/sessions/*
+storage/framework/views/*
+
+# Local dev database
+database/database.sqlite

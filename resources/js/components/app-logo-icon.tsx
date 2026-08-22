@@ -1,0 +1,33 @@
+import type { SVGAttributes } from 'react';
+
+/**
+ * Kozy gable mark: a house silhouette holding the K, knocked out of a blue
+ * tile. Ported from the "Gable K" (1d) variant of the Kozy Logo design doc,
+ * using its small-size treatment so it stays readable down to 16px.
+ *
+ * The brand colours are baked in on purpose - this is an app icon, not a
+ * glyph, so it must look the same on every surface and in both themes.
+ */
+export default function AppLogoIcon(props: SVGAttributes<SVGElement>) {
+    return (
+        <svg
+            {...props}
+            viewBox="0 0 120 120"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+            role="img"
+            aria-label="Kozy"
+        >
+            <rect width="120" height="120" rx="30" fill="#2E6A9E" />
+            <g fill="#F7FAFC">
+                <path d="M60 14 112 54 8 54Z" />
+                <path d="M23 52h74a3 3 0 0 1 3 3v39a12 12 0 0 1-12 12H32a12 12 0 0 1-12-12V55a3 3 0 0 1 3-3Z" />
+            </g>
+            <g fill="#2E6A9E">
+                <rect x="34" y="64" width="8" height="30" />
+                <path d="M66 64v4.5L50.4 79H46v-5.7Z" />
+                <path d="M46 79h4.4L66 89.5V94L46 84.7Z" />
+            </g>
+        </svg>
+    );
+}
