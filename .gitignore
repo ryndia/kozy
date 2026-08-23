@@ -34,3 +34,4 @@ yarn-error.log
 /docker-compose.prod.yml
 /nginx-kozy.ryndia.space.conf
 /docker/runtime-8.4/
+/kozy-dns.txt
