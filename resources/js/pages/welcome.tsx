@@ -16,6 +16,29 @@ import {
     type PublicProperty,
 } from '@/lib/property-search';
 
+/** A house snapped in two, for when no stay has been featured yet.
+ *  Sibling to BrokenMapPin on the property page — same broken-outline idiom. */
+const BrokenHouse = ({ className }: { className?: string }) => (
+    <svg
+        viewBox="0 0 48 48"
+        fill="currentColor"
+        className={className}
+        aria-hidden="true"
+    >
+        {/* roof and wall on one side, ending in the jagged fracture; the
+            window is punched out with evenodd so the mark needs no backing */}
+        <path
+            fillRule="evenodd"
+            d="M24 6 L7 21 L11 21 L11 41 L23.4 41 L25.2 35.4 L21.8 30.2 L25.2 24.6 L21.9 19.2 L25.4 13 Z M14.6 26.4 L20.6 26.4 L20.6 32.8 L14.6 32.8 Z"
+        />
+        {/* the other side, fallen away from the break */}
+        <path
+            d="M24 6 L25.4 13 L21.9 19.2 L25.2 24.6 L21.8 30.2 L25.2 35.4 L23.4 41 L37 41 L37 21 L41 21 Z"
+            transform="translate(3.2 2.4) rotate(7 30 31)"
+        />
+    </svg>
+);
+
 export default function Welcome({
     properties = [],
 }: {
@@ -329,72 +352,99 @@ export default function Welcome({
 
                             <div className="crystal-card relative overflow-hidden border border-white/40 bg-white/70 p-4 sm:p-5 dark:border-white/10 dark:bg-slate-900/60">
                                 <div className="absolute inset-0 bg-[linear-gradient(150deg,rgba(255,255,255,0.78),rgba(255,255,255,0.18)_48%,rgba(15,23,42,0.35)_100%)]" />
-                                <div className="relative overflow-hidden rounded-[30px]">
-                                    <img
-                                        src={normalizePropertyImage(
-                                            heroProperty,
-                                        )}
-                                        alt={
-                                            heroProperty?.title ||
-                                            'Featured property'
-                                        }
-                                        className="h-[520px] w-full object-cover"
-                                    />
-                                    <div className="absolute inset-x-0 bottom-0 p-5">
-                                        <div className="rounded-[28px] border border-white/30 bg-slate-950/40 p-5 text-white backdrop-blur-md dark:border-white/10">
-                                            <div className="flex items-center justify-between gap-3">
-                                                <span className="rounded-full bg-white/15 px-3 py-1 text-[10px] font-semibold tracking-[0.2em] text-white/85 uppercase dark:bg-white/10">
-                                                    Featured stay
-                                                </span>
-                                                <span className="text-sm font-medium text-white/80">
-                                                    {heroProperty?.currency ||
-                                                        'USD'}
-                                                </span>
-                                            </div>
-                                            <h2 className="mt-4 text-2xl font-semibold tracking-[-0.05em] text-white sm:text-3xl">
-                                                {heroProperty?.title ||
-                                                    'A featured stay will appear here'}
-                                            </h2>
-                                            <p className="mt-2 text-sm leading-6 text-white/80">
-                                                {heroProperty?.address ||
-                                                    'Set a destination in Filament to make the featured introduction more specific.'}
-                                            </p>
-                                            <div className="mt-4 flex items-center justify-between gap-4">
-                                                <div>
-                                                    <div className="text-sm text-white/70">
-                                                        {formatRoomLine(
-                                                            heroProperty || {},
-                                                        )}
-                                                    </div>
-                                                    <div className="mt-1 text-xl font-semibold text-white">
-                                                        {formatPrice(
-                                                            heroProperty?.price_per_night,
-                                                            heroProperty?.currency ??
-                                                                'USD',
-                                                        )}
-                                                        <span className="text-sm font-medium text-white/70">
-                                                            {' '}
-                                                            / night
-                                                        </span>
-                                                    </div>
+                                {heroProperty ? (
+                                    <div className="relative overflow-hidden rounded-[30px]">
+                                        <img
+                                            src={normalizePropertyImage(
+                                                heroProperty,
+                                            )}
+                                            alt={
+                                                heroProperty.title ||
+                                                'Featured property'
+                                            }
+                                            className="h-[520px] w-full object-cover"
+                                        />
+                                        <div className="absolute inset-x-0 bottom-0 p-5">
+                                            <div className="rounded-[28px] border border-white/30 bg-slate-950/40 p-5 text-white backdrop-blur-md dark:border-white/10">
+                                                <div className="flex items-center justify-between gap-3">
+                                                    <span className="rounded-full bg-white/15 px-3 py-1 text-[10px] font-semibold tracking-[0.2em] text-white/85 uppercase dark:bg-white/10">
+                                                        Featured stay
+                                                    </span>
+                                                    <span className="text-sm font-medium text-white/80">
+                                                        {heroProperty.currency ||
+                                                            'USD'}
+                                                    </span>
                                                 </div>
-                                                <a
-                                                    href={
-                                                        heroProperty?.slug
-                                                            ? buildPropertyUrl(
-                                                                  heroProperty.slug,
-                                                                  activeSearchFilters,
-                                                              )
-                                                            : staysHref
-                                                    }
-                                                    className="rounded-full bg-card px-4 py-2 text-sm font-semibold text-foreground transition hover:bg-accent"
-                                                >
-                                                    View stay
-                                                </a>
+                                                <h2 className="mt-4 text-2xl font-semibold tracking-[-0.05em] text-white sm:text-3xl">
+                                                    {heroProperty.title}
+                                                </h2>
+                                                {heroProperty.address ? (
+                                                    <p className="mt-2 text-sm leading-6 text-white/80">
+                                                        {heroProperty.address}
+                                                    </p>
+                                                ) : null}
+                                                <div className="mt-4 flex items-center justify-between gap-4">
+                                                    <div>
+                                                        <div className="text-sm text-white/70">
+                                                            {formatRoomLine(
+                                                                heroProperty,
+                                                            )}
+                                                        </div>
+                                                        <div className="mt-1 text-xl font-semibold text-white">
+                                                            {formatPrice(
+                                                                heroProperty.price_per_night,
+                                                                heroProperty.currency ??
+                                                                    'USD',
+                                                            )}
+                                                            <span className="text-sm font-medium text-white/70">
+                                                                {' '}
+                                                                / night
+                                                            </span>
+                                                        </div>
+                                                    </div>
+                                                    <a
+                                                        href={
+                                                            heroProperty.slug
+                                                                ? buildPropertyUrl(
+                                                                      heroProperty.slug,
+                                                                      activeSearchFilters,
+                                                                  )
+                                                                : staysHref
+                                                        }
+                                                        className="rounded-full bg-card px-4 py-2 text-sm font-semibold text-foreground transition hover:bg-accent"
+                                                    >
+                                                        View stay
+                                                    </a>
+                                                </div>
                                             </div>
                                         </div>
                                     </div>
-                                </div>
+                                ) : (
+                                    <div className="relative flex h-[520px] flex-col items-center justify-center overflow-hidden rounded-[30px] bg-muted px-6 py-10 text-center">
+                                        {/* faint grid, so the empty state still reads as a card */}
+                                        <div
+                                            aria-hidden="true"
+                                            className="pointer-events-none absolute inset-0 [background-image:linear-gradient(to_right,var(--color-border)_1px,transparent_1px),linear-gradient(to_bottom,var(--color-border)_1px,transparent_1px)] [background-size:32px_32px] opacity-[0.35]"
+                                        />
+
+                                        <div className="relative flex h-20 w-20 items-center justify-center rounded-full border border-amber-200 bg-card shadow-sm dark:border-amber-900/60">
+                                            <BrokenHouse className="h-11 w-11 text-amber-600 dark:text-amber-400" />
+                                        </div>
+
+                                        <h2 className="relative mt-6 text-xl font-semibold text-foreground">
+                                            No featured property yet
+                                        </h2>
+                                        <p className="relative mt-3 max-w-md text-sm leading-7 text-muted-foreground">
+                                            Once a stay is published it will be
+                                            introduced here, with its cover
+                                            photo and nightly rate.
+                                        </p>
+
+                                        <div className="relative mt-6 rounded-full border border-border bg-card px-4 py-2 text-sm font-medium text-foreground shadow-sm">
+                                            Featured stay pending
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         </section>
 
