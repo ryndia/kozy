@@ -40,6 +40,10 @@ APP_DOMAIN="kozy.ryndia.space"
 COMPOSE_FILE="docker-compose.prod.yml"
 NGINX_CONF="nginx-${APP_DOMAIN}.conf"
 BACKUP_DIR_NAME="storage/backups"
+RUNTIME_DIR="docker/runtime-8.4"
+# Keep in sync with the mailserver image in write_compose_file().
+MAIL_IMAGE="ghcr.io/docker-mailserver/docker-mailserver:latest"
+MAIL_CONFIG_VOLUME="kozy_kozy-mail-config"
 BACKUP_KEEP=10
 
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -89,7 +93,7 @@ services:
     # ── Laravel application (artisan serve under supervisord) ───────
     app:
         build:
-            context: ./vendor/laravel/sail/runtimes/8.4
+            context: ./docker/runtime-8.4
             dockerfile: Dockerfile
             args:
                 WWWGROUP: '${WWWGROUP:-1000}'
@@ -580,6 +584,66 @@ create_env_file() {
     warn "Fill in the __SET_ME__ values (Stripe) before taking payments"
 }
 
+prepare_build_context() {
+    # The Sail runtime ships inside vendor/laravel/sail, a *dev* dependency
+    # that `composer install --no-dev` removes on every deploy. Copying it to
+    # $RUNTIME_DIR keeps the image buildable for good.
+    if [ -f "$RUNTIME_DIR/Dockerfile" ]; then
+        ok "Build context ready ($RUNTIME_DIR)"
+        return 0
+    fi
+    [ -d vendor/laravel/sail/runtimes/8.4 ] || bootstrap_composer
+    [ -d vendor/laravel/sail/runtimes/8.4 ] || fail "vendor/laravel/sail missing — cannot build the app image"
+    mkdir -p "$(dirname "$RUNTIME_DIR")"
+    rm -rf "$RUNTIME_DIR"
+    cp -r vendor/laravel/sail/runtimes/8.4 "$RUNTIME_DIR"
+    ok "Copied the Sail 8.4 runtime to $RUNTIME_DIR (survives composer --no-dev)"
+}
+
+mail_account_exists() {
+    docker run --rm -v "$MAIL_CONFIG_VOLUME:/tmp/docker-mailserver" "$MAIL_IMAGE" \
+        awk -F'|' -v a="$1" '$1 == a { found = 1 } END { exit !found }' \
+        /tmp/docker-mailserver/postfix-accounts.cf >/dev/null 2>&1
+}
+
+ensure_mail_account() {
+    # docker-mailserver refuses to start Dovecot with zero accounts: it warns
+    # for 120s and then shuts the container down. So the mailbox has to exist
+    # in the config volume BEFORE the stack comes up — provision it with a
+    # throwaway container that mounts only that volume.
+    local account="$1" password="$2" hash
+
+    docker volume inspect "$MAIL_CONFIG_VOLUME" >/dev/null 2>&1 \
+        || docker volume create "$MAIL_CONFIG_VOLUME" >/dev/null
+
+    # Read the accounts file directly: `setup email list` needs a running
+    # Dovecot for its quota column and aborts in a throwaway container, which
+    # would make this look like "no account" and append a duplicate.
+    if mail_account_exists "$account"; then
+        ok "Mailbox $account already provisioned"
+        return 0
+    fi
+
+    if docker run --rm -v "$MAIL_CONFIG_VOLUME:/tmp/docker-mailserver" "$MAIL_IMAGE" \
+            setup email add "$account" "$password" >/dev/null 2>&1 \
+            && mail_account_exists "$account"; then
+        ok "Mailbox provisioned: $account"
+        return 0
+    fi
+
+    # Fallback: write the account line ourselves (email|{SCHEME}hash).
+    hash="$(docker run --rm "$MAIL_IMAGE" doveadm pw -s SHA512-CRYPT -p "$password" 2>/dev/null | tr -d '\r\n')"
+    if [ -n "$hash" ] && ! mail_account_exists "$account"; then
+        docker run --rm -v "$MAIL_CONFIG_VOLUME:/tmp/docker-mailserver" "$MAIL_IMAGE" \
+            bash -c "printf '%s|%s\n' '$account' '$hash' >> /tmp/docker-mailserver/postfix-accounts.cf"
+        ok "Mailbox provisioned: $account (via doveadm hash)"
+        return 0
+    fi
+
+    warn "Could not provision $account — the mail server will shut itself down"
+    return 1
+}
+
 bootstrap_composer() {
     # Sail's Dockerfile lives inside vendor/, so dependencies must exist
     # before the image can be built. sail is a require-dev package, hence
@@ -714,22 +778,17 @@ cmd_mail() {
     mail_account="$(env_value MAIL_ACCOUNT)";   mail_account="${mail_account:-noreply@$mail_domain}"
     mail_password="$(env_value MAIL_ACCOUNT_PASSWORD)"
 
-    info "Waiting for the mail server to finish initialising..."
+    # ── Mailbox first ──────────────────────────────────────────────
+    # Without an account docker-mailserver never starts Dovecot and shuts the
+    # container down after 120s, so this has to happen before we wait on it.
+    info "Ensuring the sending mailbox exists..."
+    ensure_mail_account "$mail_account" "$mail_password" \
+        || fail "No mail account — the mail server cannot start. See ./deploy.sh logs mailserver"
+
+    info "Starting the mail server..."
+    compose up -d mailserver >/dev/null 2>&1 || true
     wait_for_mail || fail "Mail server did not start — check: ./deploy.sh logs mailserver"
     ok "Postfix is accepting SMTP on $mail_hostname"
-
-    # ── Mailbox ────────────────────────────────────────────────────
-    info "Ensuring the sending mailbox exists..."
-    if compose exec -T mailserver setup email list 2>/dev/null | grep -q "$mail_account"; then
-        ok "Mailbox $mail_account already exists"
-    else
-        if compose exec -T mailserver setup email add "$mail_account" "$mail_password" >/dev/null 2>&1; then
-            ok "Mailbox created: $mail_account"
-        else
-            warn "Could not create $mail_account — create it manually:"
-            warn "  ./deploy.sh shell mailserver → setup email add $mail_account"
-        fi
-    fi
 
     # ── DKIM ───────────────────────────────────────────────────────
     info "Ensuring a DKIM key exists for $mail_domain..."
@@ -882,6 +941,10 @@ cmd_setup() {
 
     info "Bootstrapping Composer on the host..."
     bootstrap_composer
+    prepare_build_context
+
+    info "Provisioning the mail account (required before first start)..."
+    ensure_mail_account "$(env_value MAIL_ACCOUNT)" "$(env_value MAIL_ACCOUNT_PASSWORD)"
 
     info "Building images and starting containers..."
     compose up -d --build
@@ -1017,6 +1080,12 @@ cmd_deploy() {
     write_compose_file
     write_nginx_conf
     ok "$COMPOSE_FILE and $NGINX_CONF refreshed from deploy.sh"
+
+    info "Verifying the image build context..."
+    prepare_build_context
+
+    info "Verifying the mail account exists..."
+    ensure_mail_account "$(env_value MAIL_ACCOUNT)" "$(env_value MAIL_ACCOUNT_PASSWORD)" || true
 
     info "Starting / updating containers..."
     compose up -d --build --remove-orphans

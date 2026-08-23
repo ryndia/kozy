@@ -275,6 +275,30 @@ every run; to do it alone: `./deploy.sh shell app` then
 **Redis `NOAUTH`** — `REDIS_PASSWORD` drifted from what the container started
 with. `docker compose -f docker-compose.prod.yml --env-file .env up -d redis`.
 
+**Mail server keeps restarting: "You need at least one mail account to start
+Dovecot"** — docker-mailserver refuses to start Dovecot with zero accounts and
+shuts the container down after 120s. The account has to exist in the config
+volume *before* the container starts, so `deploy.sh` provisions it with a
+throwaway container. To do it by hand:
+
+```bash
+docker run --rm -v kozy_kozy-mail-config:/tmp/docker-mailserver \
+  ghcr.io/docker-mailserver/docker-mailserver:latest \
+  setup email add noreply@kozy.ryndia.space "$(grep '^MAIL_ACCOUNT_PASSWORD=' .env | cut -d= -f2-)"
+docker compose -f docker-compose.prod.yml --env-file .env up -d mailserver
+```
+
+**Image build fails: build context `./docker/runtime-8.4` missing** — the Sail
+runtime lives in `vendor/laravel/sail`, a *dev* dependency that
+`composer install --no-dev` deletes on every deploy. The script copies it to
+`docker/runtime-8.4` once and rebuilds it from Composer if it ever goes missing;
+if you hit this, just re-run `./deploy.sh`. (This is the same failure that
+breaks visual.ryndia.space's MySQL: its compose mounts
+`vendor/laravel/sail/database/mysql/create-testing-database.sh`, and once
+Composer removes that file Docker creates a *directory* in its place — hence
+"not a directory". Delete the stray path and restore the vendor directory, or
+drop that mount from the compose file: it only ever mattered on first DB init.)
+
 **OTP email never arrives**
 1. `./deploy.sh status` — is SMTP listening, is DKIM active?
 2. `./deploy.sh logs mailserver` — look for `status=sent`, `status=bounced`, `status=deferred`.
