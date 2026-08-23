@@ -39,6 +39,7 @@ set -euo pipefail
 APP_DOMAIN="kozy.ryndia.space"
 COMPOSE_FILE="docker-compose.prod.yml"
 NGINX_CONF="nginx-${APP_DOMAIN}.conf"
+NGINX_MAIN_CONF="${NGINX_MAIN_CONF:-/etc/nginx/nginx.conf}"
 BACKUP_DIR_NAME="storage/backups"
 RUNTIME_DIR="docker/runtime-8.4"
 # Keep in sync with the mailserver image in write_compose_file().
@@ -873,6 +874,38 @@ cmd_mail() {
 #  Nginx + TLS
 # ═══════════════════════════════════════════════════════════════════
 
+nginx_uses_sites_enabled() {
+    # Debian/Ubuntu ship `include /etc/nginx/sites-enabled/*;` but plenty of
+    # installs (this VPS included) only read conf.d/ — dropping a vhost into
+    # sites-enabled there is silently ignored, and requests fall through to
+    # whichever server block loads first.
+    grep -qE '^[[:space:]]*include[[:space:]]+/etc/nginx/sites-enabled/' "$NGINX_MAIN_CONF" 2>/dev/null
+}
+
+install_vhost() {
+    local src="$1"
+    if nginx_uses_sites_enabled; then
+        sudo cp "$src" "/etc/nginx/sites-available/$APP_DOMAIN"
+        sudo ln -sf "/etc/nginx/sites-available/$APP_DOMAIN" "/etc/nginx/sites-enabled/$APP_DOMAIN"
+        ok "Installed to sites-available/$APP_DOMAIN and enabled"
+    else
+        sudo cp "$src" "/etc/nginx/conf.d/$APP_DOMAIN.conf"
+        ok "Installed to conf.d/$APP_DOMAIN.conf (this nginx.conf does not include sites-enabled/)"
+        [ -e "/etc/nginx/sites-enabled/$APP_DOMAIN" ] && \
+            warn "A stale, unread symlink remains at sites-enabled/$APP_DOMAIN — safe to delete"
+    fi
+}
+
+assert_vhost_loaded() {
+    if sudo nginx -T 2>/dev/null | grep -qE "^[[:space:]]*server_name[[:space:]]+$APP_DOMAIN;"; then
+        ok "nginx is serving $APP_DOMAIN"
+        return 0
+    fi
+    fail "nginx reloaded but has no server block for $APP_DOMAIN — requests will
+      hit whichever vhost loads first (that is why kozy.ryndia.space showed the
+      Cap panel). Check: sudo nginx -T | grep server_name"
+}
+
 cmd_nginx() {
     title "Nginx + TLS for $APP_DOMAIN"
 
@@ -886,7 +919,7 @@ cmd_nginx() {
 
     if [ ! -f "/etc/letsencrypt/live/$APP_DOMAIN/fullchain.pem" ]; then
         info "No certificate yet — installing a temporary HTTP-only vhost first..."
-        sudo tee "/etc/nginx/sites-available/$APP_DOMAIN" >/dev/null <<HTTP_EOF
+        cat > "$PROJECT_DIR/.nginx-bootstrap.conf" <<HTTP_EOF
 server {
     listen 80;
     listen [::]:80;
@@ -895,8 +928,10 @@ server {
     location / { return 200 'kozy: awaiting certificate'; add_header Content-Type text/plain; }
 }
 HTTP_EOF
-        sudo ln -sf "/etc/nginx/sites-available/$APP_DOMAIN" "/etc/nginx/sites-enabled/$APP_DOMAIN"
+        install_vhost "$PROJECT_DIR/.nginx-bootstrap.conf"
+        rm -f "$PROJECT_DIR/.nginx-bootstrap.conf"
         sudo nginx -t && sudo systemctl reload nginx
+        assert_vhost_loaded
         ok "Temporary vhost live — requesting the certificate"
 
         sudo certbot certonly --webroot -w /var/www/certbot -d "$APP_DOMAIN" \
@@ -907,11 +942,17 @@ HTTP_EOF
     fi
 
     info "Installing the full TLS vhost..."
-    sudo cp "$NGINX_CONF" "/etc/nginx/sites-available/$APP_DOMAIN"
-    sudo ln -sf "/etc/nginx/sites-available/$APP_DOMAIN" "/etc/nginx/sites-enabled/$APP_DOMAIN"
+    install_vhost "$NGINX_CONF"
     sudo nginx -t || fail "nginx -t failed — the vhost was not activated cleanly"
     sudo systemctl reload nginx
-    ok "Nginx reloaded — https://$APP_DOMAIN is served"
+    assert_vhost_loaded
+
+    if curl -fsS --max-time 10 -o /dev/null "https://$APP_DOMAIN/up"; then
+        ok "https://$APP_DOMAIN/up answers 200 — the app is being served"
+    else
+        warn "https://$APP_DOMAIN/up did not answer 200 yet"
+        warn "  Behind Cloudflare? Set that zone's SSL mode to Full (strict)."
+    fi
 
     echo ""
     echo "  Optional, for a mail-server certificate (needed only if you expose"
