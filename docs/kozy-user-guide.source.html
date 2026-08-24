@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+    @page { margin: 22mm 18mm 20mm 18mm; }
+
+    body {
+        font-family: 'DejaVu Sans', sans-serif;
+        font-size: 10.5pt;
+        line-height: 1.55;
+        color: #23303c;
+        margin: 0;
+    }
+
+    /* ---------- running footer ---------- */
+    #footer {
+        position: fixed;
+        bottom: -12mm; left: 0; right: 0;
+        height: 10mm;
+        font-size: 8pt;
+        color: #8b98a5;
+        border-top: 0.5pt solid #dde3e9;
+        padding-top: 3mm;
+    }
+    #footer .left  { float: left; }
+    #footer .right { float: right; }
+
+    /* ---------- cover ---------- */
+    .cover { text-align: center; padding-top: 55mm; }
+    .cover .mark {
+        font-size: 34pt; font-weight: bold; color: #2E6A9E;
+        letter-spacing: 2pt;
+    }
+    .cover .rule {
+        width: 60mm; height: 3pt; background: #2E6A9E;
+        margin: 8mm auto 8mm auto;
+    }
+    .cover h1 { font-size: 20pt; margin: 0 0 4mm 0; color: #23303c; font-weight: normal; }
+    .cover .sub { font-size: 11pt; color: #64748b; margin-bottom: 22mm; }
+    .cover .audience {
+        display: inline-block; text-align: left;
+        border: 0.75pt solid #dde3e9; border-radius: 4pt;
+        padding: 6mm 10mm; font-size: 10pt; color: #45566a;
+    }
+    .cover .audience b { color: #2E6A9E; }
+
+    /* ---------- structure ---------- */
+    h2.part {
+        font-size: 16pt; color: #ffffff; background: #2E6A9E;
+        padding: 4mm 5mm; margin: 0 0 6mm 0; border-radius: 3pt;
+    }
+    h2.part span { font-size: 9pt; display: block; color: #cfe2f2; letter-spacing: 1pt; }
+
+    h3 {
+        font-size: 12.5pt; color: #2E6A9E; margin: 7mm 0 2mm 0;
+        border-bottom: 0.75pt solid #dde3e9; padding-bottom: 1.5mm;
+    }
+    h4 { font-size: 10.5pt; color: #23303c; margin: 5mm 0 1mm 0; }
+
+    p { margin: 0 0 3mm 0; }
+    ul, ol { margin: 0 0 3mm 0; padding-left: 6mm; }
+    li { margin-bottom: 1.2mm; }
+
+    .lead { color: #45566a; font-size: 10.5pt; }
+
+    /* ---------- components ---------- */
+    table.grid {
+        width: 100%; border-collapse: collapse; margin: 2mm 0 4mm 0;
+        font-size: 9.5pt;
+    }
+    table.grid th {
+        background: #eef3f8; color: #2E6A9E; text-align: left;
+        padding: 2mm 3mm; border: 0.5pt solid #dde3e9; font-size: 9pt;
+    }
+    table.grid td {
+        padding: 2mm 3mm; border: 0.5pt solid #dde3e9; vertical-align: top;
+    }
+    table.grid td.k { width: 32%; font-weight: bold; color: #23303c; }
+
+    .note {
+        background: #f4f8fb; border-left: 3pt solid #2E6A9E;
+        padding: 3mm 4mm; margin: 3mm 0 4mm 0; font-size: 9.5pt; color: #37475a;
+    }
+    .warn {
+        background: #fdf6ee; border-left: 3pt solid #c98a2e;
+        padding: 3mm 4mm; margin: 3mm 0 4mm 0; font-size: 9.5pt; color: #6b4c1b;
+    }
+
+    .steps { counter-reset: step; padding-left: 0; list-style: none; margin-left: 0; }
+    .steps li {
+        counter-increment: step; position: relative;
+        padding-left: 9mm; margin-bottom: 2.5mm;
+    }
+    .steps li:before {
+        content: counter(step);
+        position: absolute; left: 0; top: 0.3mm;
+        width: 6mm; height: 6mm; line-height: 6mm; text-align: center;
+        background: #2E6A9E; color: #fff; border-radius: 3mm;
+        font-size: 8.5pt; font-weight: bold;
+    }
+
+    code, .ui {
+        font-family: 'DejaVu Sans Mono', monospace; font-size: 9pt;
+        background: #eef3f8; padding: 0.4mm 1.2mm; border-radius: 2pt;
+        color: #1f5480;
+    }
+
+    .pill {
+        font-size: 8.5pt; padding: 0.6mm 2mm; border-radius: 6pt;
+        border: 0.5pt solid #cbd5e1; color: #45566a; background: #f8fafc;
+    }
+
+    .pagebreak { page-break-before: always; }
+    .toc td { padding: 1.6mm 0; border-bottom: 0.4pt dotted #cbd5e1; font-size: 10pt; }
+    .toc td.n { width: 12mm; color: #2E6A9E; font-weight: bold; }
+</style>
+</head>
+<body>
+
+<div id="footer">
+    <div class="left">Kozy — User Guide</div>
+</div>
+
+<!-- ============ COVER ============ -->
+<div class="cover">
+    <div class="mark">KOZY</div>
+    <div class="rule"></div>
+    <h1>User Guide</h1>
+    <div class="sub">Booking and managing holiday rentals on Kozy</div>
+    <div class="audience">
+        <b>Part 1</b> &nbsp;— &nbsp;For property owners (back office)<br>
+        <b>Part 2</b> &nbsp;— &nbsp;For guests renting a property
+    </div>
+</div>
+
+<!-- ============ TOC ============ -->
+<div class="pagebreak"></div>
+<h3 style="margin-top:0">Contents</h3>
+<table class="toc" width="100%">
+    <tr><td class="n">1</td><td>Kozy in one page</td></tr>
+    <tr><td class="n">&nbsp;</td><td><b>Part 1 — For the property owner</b></td></tr>
+    <tr><td class="n">2</td><td>Signing in to the back office</td></tr>
+    <tr><td class="n">3</td><td>The dashboard</td></tr>
+    <tr><td class="n">4</td><td>Publishing a rental property</td></tr>
+    <tr><td class="n">5</td><td>The photo gallery and room layout</td></tr>
+    <tr><td class="n">6</td><td>Handling bookings</td></tr>
+    <tr><td class="n">7</td><td>Payments and revenue</td></tr>
+    <tr><td class="n">8</td><td>Guests and reviews</td></tr>
+    <tr><td class="n">9</td><td>Everyday checklist</td></tr>
+    <tr><td class="n">&nbsp;</td><td><b>Part 2 — For the guest</b></td></tr>
+    <tr><td class="n">10</td><td>Finding a place to stay</td></tr>
+    <tr><td class="n">11</td><td>Reading a property page</td></tr>
+    <tr><td class="n">12</td><td>Reserving and creating your account</td></tr>
+    <tr><td class="n">13</td><td>Paying for your stay</td></tr>
+    <tr><td class="n">14</td><td>Managing your bookings</td></tr>
+    <tr><td class="n">15</td><td>Cancelling a reservation</td></tr>
+    <tr><td class="n">16</td><td>Leaving a review</td></tr>
+    <tr><td class="n">17</td><td>Your profile and security</td></tr>
+    <tr><td class="n">18</td><td>Common questions</td></tr>
+</table>
+
+<h3>1. Kozy in one page</h3>
+<p class="lead">Kozy is a holiday-rental website with two sides that work together.</p>
+<table class="grid">
+    <tr><th width="50%">The public website</th><th width="50%">The back office</th></tr>
+    <tr>
+        <td>
+            Where guests browse properties, pick their dates, reserve, pay, and
+            manage their stays. No account is needed to look around — only to book.
+            <br><br><span class="pill">Address: the site home page</span>
+        </td>
+        <td>
+            Where the property owner publishes listings, follows reservations,
+            records payments, and moderates guest reviews.
+            <br><br><span class="pill">Address: <code>/admin</code></span>
+        </td>
+    </tr>
+</table>
+<p>A reservation always travels the same path:</p>
+<table class="grid">
+    <tr><th>Stage</th><th>What it means</th><th>Who moves it</th></tr>
+    <tr><td class="k">Pending</td><td>Dates are held for the guest, payment not settled yet.</td><td>Created by the guest</td></tr>
+    <tr><td class="k">Confirmed</td><td>Payment received, the stay is secured.</td><td>Automatic on payment</td></tr>
+    <tr><td class="k">Completed</td><td>The stay has taken place.</td><td>Set by the owner</td></tr>
+    <tr><td class="k">Cancelled</td><td>The reservation was dropped; the nights are released.</td><td>Guest or owner</td></tr>
+</table>
+<div class="note">
+    Pending and confirmed reservations both block the calendar. Only a cancellation
+    puts those nights back on sale.
+</div>
+
+<!-- ============ PART 1 ============ -->
+<div class="pagebreak"></div>
+<h2 class="part"><span>PART 1</span>For the property owner</h2>
+<p class="lead">
+    Everything in this part happens in the back office at <code>/admin</code>.
+    It is a private area — guests never see it.
+</p>
+
+<h3>2. Signing in to the back office</h3>
+<ol class="steps">
+    <li>Open <code>/admin</code> in your browser (for example <code>yoursite.com/admin</code>).</li>
+    <li>Enter the email address and password of your owner account, then select <span class="ui">Sign in</span>.</li>
+    <li>You land on the dashboard. The left sidebar holds everything else.</li>
+</ol>
+<p>The sidebar is organised in three groups:</p>
+<table class="grid">
+    <tr><td class="k">Rental management</td><td>Rental properties, Bookings, Property images</td></tr>
+    <tr><td class="k">Revenue</td><td>Payments</td></tr>
+    <tr><td class="k">People</td><td>Clients, Reviews</td></tr>
+</table>
+<div class="note">
+    <b>Handy shortcuts.</b> Press <code>Ctrl+K</code> (or <code>Cmd+K</code> on a Mac)
+    anywhere to search across properties, bookings and guests by name, title or email.
+    The sidebar can be collapsed with the toggle at its top to give tables more room.
+    Your own name at the top right opens your profile, and <span class="ui">Visit website</span>
+    there opens the public site in a new tab so you can check how your listing looks to guests.
+</div>
+
+<h3>3. The dashboard</h3>
+<p>The first screen answers "how is the business doing right now?" with six figures.</p>
+<table class="grid">
+    <tr><th>Card</th><th>What it tells you</th></tr>
+    <tr><td class="k">Revenue this month</td><td>Money settled this month, with an up or down arrow comparing it to last month.</td></tr>
+    <tr><td class="k">Awaiting payment</td><td>Total value of reservations that are not settled yet — your follow-up list.</td></tr>
+    <tr><td class="k">Average booking value</td><td>Average across every reservation that has not been cancelled.</td></tr>
+    <tr><td class="k">Bookings this month</td><td>Number of stays starting this month.</td></tr>
+    <tr><td class="k">Guests in house</td><td>How many parties are staying at this very moment.</td></tr>
+    <tr><td class="k">Reviews to moderate</td><td>Guest reviews waiting for your approval before they appear publicly.</td></tr>
+</table>
+<div class="note">
+    A small orange badge next to <span class="ui">Bookings</span> in the sidebar counts
+    reservations still marked <i>Pending</i>. When that badge is visible, something is
+    waiting for a decision.
+</div>
+
+<h3>4. Publishing a rental property</h3>
+<p>Go to <span class="ui">Rental management → Rental properties</span> and select <span class="ui">New rental property</span>. The form is split into four sections.</p>
+
+<h4>Property overview</h4>
+<table class="grid">
+    <tr><td class="k">Title</td><td>The guest-facing name, e.g. "Sea-view villa in Grand Baie". The web address of the listing is built from it automatically, and follows along if you rename the property.</td></tr>
+    <tr><td class="k">Description</td><td>The story of the stay: the atmosphere, the surroundings, what makes it special. Bold, lists and links are available in the editor.</td></tr>
+    <tr><td class="k">Price per night</td><td>The nightly rate. Every quote a guest sees is this rate multiplied by the number of nights.</td></tr>
+    <tr><td class="k">Currency</td><td>MUR, USD, EUR, GBP, AED, MAD, KES or ZAR. Prices, payments and receipts all follow the property's currency.</td></tr>
+    <tr><td class="k">Max guests</td><td>The largest party the property sleeps comfortably. Guests cannot book for more than this.</td></tr>
+    <tr><td class="k">Status</td><td><b>Active</b> puts the property on the public site. <b>Inactive</b> takes it off and stops new reservations — use it while renovating or between seasons.</td></tr>
+</table>
+
+<h4>Space layout</h4>
+<p>
+    Bedrooms, kitchens and bathrooms are <b>not</b> typed in — Kozy counts them from
+    the photos you upload in the gallery (see the next section), so the numbers on the
+    public page can never drift away from the pictures.
+</p>
+<table class="grid">
+    <tr><td class="k">Amenities</td><td>Short free tags a guest scans quickly: WiFi, workspace, washer, mountain view. Type one and press Enter.</td></tr>
+    <tr><td class="k">Features &amp; amenities</td><td>A searchable list of standard room features; pick as many as apply.</td></tr>
+</table>
+
+<h4>Arrival &amp; location</h4>
+<table class="grid">
+    <tr><td class="k">Address</td><td>The full address shown to guests.</td></tr>
+    <tr><td class="k">Latitude / Longitude</td><td>Optional. Fill both to display a real map on the listing; leave them blank and the page shows a neutral location placeholder instead.</td></tr>
+    <tr><td class="k">Check-in / Check-out time</td><td>Optional. When set, they appear on the public page so guests know when to arrive and leave.</td></tr>
+</table>
+<p>Select <span class="ui">Create</span> to save. An active property appears on the public site immediately, and the four most recent ones are featured on the home page.</p>
+
+<h3>5. The photo gallery and room layout</h3>
+<p>
+    In the <span class="ui">Property gallery</span> section, select <span class="ui">Add room photo</span>
+    once per room you want to show. Each entry carries:
+</p>
+<table class="grid">
+    <tr><td class="k">Room type</td><td>Bedroom, kitchen, bathroom, and so on. <b>This is what drives the room counts.</b></td></tr>
+    <tr><td class="k">Room name</td><td>e.g. "Master bedroom", "Kitchenette", "Family bathroom". Two photos sharing a name count as one room; photos with no name each count as their own room.</td></tr>
+    <tr><td class="k">Image</td><td>The photo file itself.</td></tr>
+    <tr><td class="k">Guest-facing caption</td><td>A short line describing the photo.</td></tr>
+    <tr><td class="k">Cover</td><td>Mark one photo as the cover. It becomes the thumbnail in search results; if none is marked, the first photo is used.</td></tr>
+</table>
+<div class="warn">
+    <b>Worth getting right.</b> If a bedroom has no photo, the listing will not claim
+    that bedroom. Photograph every room you want counted — one clear picture per room,
+    named consistently.
+</div>
+<p>
+    You can also reach every image through <span class="ui">Property images</span> in the
+    sidebar, which is convenient for replacing a single photo without opening the whole
+    property form.
+</p>
+
+<h3>6. Handling bookings</h3>
+<p>
+    <span class="ui">Rental management → Bookings</span> lists every reservation. Each row
+    carries a reference such as <code>BK-00042</code>, the property, the guest, both dates,
+    the number of nights and guests, the total, the reservation status and the payment status.
+</p>
+
+<h4>Finding what you need</h4>
+<ul>
+    <li>Filter by <b>status</b> to isolate pending reservations awaiting a decision.</li>
+    <li>Filter by <b>property</b> when you manage several places.</li>
+    <li>Filter by <b>stay dates</b> — "Staying from" and "Staying until" — to build an arrivals list for a given week.</li>
+</ul>
+
+<h4>Acting on a reservation</h4>
+<p>The menu at the end of each row offers <span class="ui">View</span>, <span class="ui">Edit</span> and <span class="ui">Delete</span>.</p>
+<ul>
+    <li><b>Confirm a stay</b> — open it and set the status to <i>Confirmed</i>. This happens on its own as soon as the guest pays online.</li>
+    <li><b>Close a stay</b> — set it to <i>Completed</i> once the guests have left.</li>
+    <li><b>Cancel</b> — set it to <i>Cancelled</i>. The nights immediately return to the public calendar.</li>
+</ul>
+<p>
+    You can also create a booking yourself, for a guest who phoned or emailed. Pick the
+    property, the guest, the dates and the party size; the total is proposed for you as
+    nightly rate × nights, and you can adjust it before saving.
+</p>
+<div class="warn">
+    <b>Deleting is not cancelling.</b> Deleting erases the record and its history.
+    To free the dates while keeping the trace, set the status to <i>Cancelled</i> instead.
+</div>
+
+<h3>7. Payments and revenue</h3>
+<p>
+    Every reservation gets a payment record, referenced <code>PM-00042</code>, which you
+    will find under <span class="ui">Revenue → Payments</span>.
+</p>
+<table class="grid">
+    <tr><th>Payment status</th><th>Meaning</th></tr>
+    <tr><td class="k">Pending</td><td>Not settled yet. This is the amount shown in "Awaiting payment".</td></tr>
+    <tr><td class="k">Paid</td><td>Settled. The reservation is confirmed automatically.</td></tr>
+    <tr><td class="k">Failed</td><td>The card payment did not go through. The guest can try again.</td></tr>
+    <tr><td class="k">Refunded</td><td>Money returned to the guest.</td></tr>
+</table>
+<p>
+    When a guest pays by bank transfer or in cash, use <span class="ui">Mark as paid</span>
+    on the row. That stamps the settlement date and confirms the reservation, exactly as an
+    online payment would. Open the record itself to note the method and a transaction
+    reference. The <span class="ui">Amount</span> column totals at the bottom of the table,
+    and the <span class="ui">Settled payments only</span> filter narrows it to real income.
+</p>
+
+<h3>8. Guests and reviews</h3>
+<h4>Clients</h4>
+<p>
+    <span class="ui">People → Clients</span> shows everyone who has booked: name, email,
+    number of reservations, total paid, whether their email is verified, and the date they
+    joined. It is your address book and your best-guest list in one table.
+</p>
+
+<h4>Reviews</h4>
+<p>
+    Guests may review a stay after checking out. Reviews arrive <b>pending</b> and stay
+    invisible to the public until you act on them, from <span class="ui">People → Reviews</span>.
+</p>
+<ul>
+    <li><span class="ui">Approve</span> — publishes the review on the property page.</li>
+    <li><span class="ui">Hide from site</span> — keeps it in the back office but off the public page.</li>
+    <li><span class="ui">Edit</span> — fix an obvious typo, never the guest's opinion.</li>
+</ul>
+<div class="note">
+    The dashboard card <b>Reviews to moderate</b> tells you when something is waiting.
+    Approving quickly keeps the listing looking alive.
+</div>
+
+<h3>9. Everyday checklist</h3>
+<table class="grid">
+    <tr><th width="26%">Rhythm</th><th>What to do</th></tr>
+    <tr><td class="k">Every day</td><td>Check the orange badge on Bookings; confirm or cancel anything pending. Approve new reviews.</td></tr>
+    <tr><td class="k">Every week</td><td>Work through "Awaiting payment"; mark offline settlements as paid. Filter bookings by stay dates to prepare arrivals.</td></tr>
+    <tr><td class="k">Every month</td><td>Compare revenue with the previous month. Refresh photos and prices; set properties inactive when they are not available.</td></tr>
+</table>
+
+<!-- ============ PART 2 ============ -->
+<div class="pagebreak"></div>
+<h2 class="part"><span>PART 2</span>For the guest</h2>
+<p class="lead">
+    How to find a property, book it, pay for it, and manage your stay. You can browse
+    freely; an account is only created when you make your first reservation.
+</p>
+
+<h3>10. Finding a place to stay</h3>
+<p>
+    The home page features the newest properties. Select <span class="ui">Properties</span>
+    to see them all and narrow the list with the search bar:
+</p>
+<table class="grid">
+    <tr><td class="k">Destination</td><td>Free text matched against the title, city and address.</td></tr>
+    <tr><td class="k">Check-in / Check-out</td><td>Your dates. Check-out must be at least one night after check-in.</td></tr>
+    <tr><td class="k">Guests</td><td>The size of your party. Properties that sleep fewer are filtered out.</td></tr>
+    <tr><td class="k">Max price</td><td>Your ceiling per night.</td></tr>
+</table>
+<p>
+    Select <span class="ui">Search</span> to apply, or <span class="ui">Clear</span> to start
+    over. Your criteria travel with you to the property page, so the dates you searched for
+    are already selected when you open a listing.
+</p>
+
+<h3>11. Reading a property page</h3>
+<p>A listing gathers everything you need before deciding:</p>
+<ul>
+    <li><b>Photos room by room</b> — bedrooms, kitchens and bathrooms are shown separately, so the layout is clear before you arrive.</li>
+    <li><b>The nightly price and capacity</b> — the rate, and the maximum number of guests.</li>
+    <li><b>Amenities and features</b> — WiFi, workspace, washer, views, and the rest.</li>
+    <li><b>Location</b> — the address and a map when the owner has provided coordinates.</li>
+    <li><b>Arrival times</b> — check-in and check-out times when they are published.</li>
+    <li><b>Guest reviews</b> — real reviews from people who stayed, published after the owner has reviewed them.</li>
+</ul>
+<h4>The availability calendar</h4>
+<p>
+    The calendar colours every night so you can see what is possible at a glance:
+    <span class="pill">Open night</span> can be booked,
+    <span class="pill">Booked night</span> is already taken,
+    <span class="pill">Past night</span> has gone by.
+    Pick your arrival and departure, set the number of guests, and Kozy shows the number of
+    nights and an <b>estimated total</b> before you commit to anything.
+</p>
+
+<h3>12. Reserving and creating your account</h3>
+<p>Select <span class="ui">Reserve this stay</span>. What happens next depends on you.</p>
+
+<h4>If you are already signed in</h4>
+<p>The reservation is created straight away and you land on your bookings page.</p>
+
+<h4>If this is your first booking</h4>
+<ol class="steps">
+    <li>Enter your name and email address.</li>
+    <li>Kozy emails you a <b>six-digit code</b>. Type it into the site. The code is valid for 10 minutes — request a new one if it lapses.</li>
+    <li>Choose a password for your new account.</li>
+    <li>Your account is created and your reservation is placed at the same time. Nothing is lost along the way.</li>
+</ol>
+
+<h4>If you already have an account</h4>
+<p>
+    Kozy recognises your email address and simply asks for your password. The dates you
+    chose are kept aside and the reservation is created as soon as you sign in.
+</p>
+<div class="note">
+    Your new reservation starts as <b>Pending</b>: the dates are held for you, and payment
+    is the next step.
+</div>
+<div class="warn">
+    A reservation cannot be placed if the dates overlap an existing booking, if check-in is
+    in the past, if the stay is shorter than one night, or if your party is larger than the
+    property allows. Kozy explains which rule applies and lets you adjust.
+</div>
+
+<h3>13. Paying for your stay</h3>
+<ol class="steps">
+    <li>Open <span class="ui">My bookings</span> and find the reservation.</li>
+    <li>Select <span class="ui">Pay now</span>. A secure card payment opens for the exact total, in the property's currency.</li>
+    <li>Complete the card payment.</li>
+    <li>Your reservation flips to <b>Confirmed</b> and the payment is stamped with its date.</li>
+</ol>
+<p>
+    Card details are handled by the payment provider — Kozy never sees or stores your card
+    number. If the owner has agreed to a bank transfer or cash instead, they record the
+    payment on their side and your reservation is confirmed the same way.
+</p>
+
+<h3>14. Managing your bookings</h3>
+<p>
+    <span class="ui">My bookings</span> is your home base. A summary at the top counts your
+    reservations, what is still to pay, and what you have already paid. Tabs sort everything
+    for you:
+</p>
+<table class="grid">
+    <tr><td class="k">All</td><td>Every reservation you have ever made.</td></tr>
+    <tr><td class="k">Upcoming</td><td>Stays that have not started yet.</td></tr>
+    <tr><td class="k">Staying now</td><td>The stay you are on today.</td></tr>
+    <tr><td class="k">Completed</td><td>Stays that are behind you.</td></tr>
+    <tr><td class="k">Cancelled</td><td>Reservations you or the owner dropped.</td></tr>
+</table>
+<p>Each reservation card shows the property, the dates, the number of guests, the total and the payment state, and offers:</p>
+<table class="grid">
+    <tr><td class="k">Pay now</td><td>Settle a reservation that is still unpaid.</td></tr>
+    <tr><td class="k">Download receipt</td><td>A PDF receipt for the booking — useful for expenses or a visa file.</td></tr>
+    <tr><td class="k">View property</td><td>Return to the listing for the address, the map and the arrival times.</td></tr>
+    <tr><td class="k">Cancel booking</td><td>Drop the reservation (see below).</td></tr>
+</table>
+
+<h3>15. Cancelling a reservation</h3>
+<p>
+    Select <span class="ui">Cancel booking</span> and confirm in the dialog that appears.
+    Cancellation is possible <b>up until the day your stay begins</b>, as long as the stay
+    has not already started. Once the arrival date is behind you, the button disappears and
+    you should contact the owner directly.
+</p>
+<div class="note">
+    Cancelling releases the nights for other guests straight away. If the stay was already
+    paid, any refund is arranged with the owner and appears as <i>Refunded</i> on the payment.
+</div>
+
+<h3>16. Leaving a review</h3>
+<p>
+    Once your check-out date has passed, a review form appears on the reservation in
+    <span class="ui">My bookings</span>. Give a rating out of five and write a few lines
+    about the stay.
+</p>
+<ul>
+    <li>Only guests who actually stayed can review, and only once per stay.</li>
+    <li>Reviews are read by the owner before publication, so yours may take a little time to appear on the property page.</li>
+</ul>
+
+<h3>17. Your profile and security</h3>
+<table class="grid">
+    <tr><td class="k">Profile</td><td>Update your name and email address.</td></tr>
+    <tr><td class="k">Password</td><td>Change your password at any time. Kozy asks for the current one first.</td></tr>
+    <tr><td class="k">Two-factor authentication</td><td>Add a code from an authenticator app on top of your password, and keep the recovery codes somewhere safe.</td></tr>
+    <tr><td class="k">Passkeys</td><td>Sign in with your fingerprint, face or device PIN instead of typing a password.</td></tr>
+    <tr><td class="k">Appearance</td><td>Choose a light or dark interface, or follow your system setting.</td></tr>
+</table>
+<p>
+    Forgotten your password? Use <span class="ui">Forgot password</span> on the sign-in page
+    and follow the link emailed to you. After several failed attempts, sign-in pauses for a
+    short while — simply wait and try again.
+</p>
+
+<h3>18. Common questions</h3>
+<table class="grid">
+    <tr><td class="k">Do I need an account to browse?</td><td>No. An account is created at your first reservation, in the same flow.</td></tr>
+    <tr><td class="k">My verification code never arrived.</td><td>Check the spam folder, confirm the address you typed, then request a new code. Codes expire after 10 minutes.</td></tr>
+    <tr><td class="k">Why can I not pick those dates?</td><td>Greyed-out nights are already booked or in the past. Pick another window, or another property.</td></tr>
+    <tr><td class="k">How is the total worked out?</td><td>Nightly rate × number of nights, in the property's currency. The estimate on the listing is what you will be charged.</td></tr>
+    <tr><td class="k">When is my stay guaranteed?</td><td>When the reservation shows <b>Confirmed</b>, which happens as soon as the payment is settled.</td></tr>
+    <tr><td class="k">Where is my receipt?</td><td><span class="ui">Download receipt</span> on the reservation in My bookings, at any time.</td></tr>
+    <tr><td class="k">A property vanished from the site.</td><td>The owner has set it inactive. Reservations already made are unaffected.</td></tr>
+</table>
+
+
+
+</body>
+</html>

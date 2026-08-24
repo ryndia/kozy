@@ -18,6 +18,17 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        // Nginx terminates TLS on the host and proxies to the container over
+        // plain HTTP. Untrusted, that makes every generated URL http:// while
+        // the page itself is served over https:// — a different origin as far
+        // as the CSP is concerned, so assets and Inertia requests get blocked.
+        // The app port is published on 127.0.0.1 only, so nothing but that
+        // proxy can reach it. X-Forwarded-Host is deliberately not trusted;
+        // Nginx already forwards the real Host header.
+        $middleware->trustProxies(at: '*', headers: Request::HEADER_X_FORWARDED_FOR |
+            Request::HEADER_X_FORWARDED_PORT |
+            Request::HEADER_X_FORWARDED_PROTO);
+
         $middleware->encryptCookies(except: ['appearance', 'sidebar_state']);
         $middleware->alias([
             'otp.verified' => EnsureRenterOtpVerified::class,
