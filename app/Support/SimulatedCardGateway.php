@@ -8,24 +8,20 @@ use Illuminate\Support\Str;
 /**
  * A pretend card processor, standing in until the MCB gateway is integrated.
  *
- * Only the test cards below are accepted. Anything else is refused before it
- * is looked at, so a guest who types a real card by mistake is told so rather
- * than "charged". No money moves either way, and nothing about the card is
- * kept beyond its brand and last four digits.
+ * Any well-formed card number is approved and no money moves - it is there to
+ * show how paying works. Two numbers are kept back to demonstrate a decline.
+ * Nothing about the card is kept beyond its brand and last four digits.
  */
 class SimulatedCardGateway
 {
     /**
-     * Test card numbers, and the decline message each one answers with - null
-     * for a card that is approved.
+     * Card numbers that are declined, and the message each one answers with.
      *
-     * @var array<string, array{brand: string, decline: string|null}>
+     * @var array<string, string>
      */
-    public const TEST_CARDS = [
-        '4242424242424242' => ['brand' => 'Visa', 'decline' => null],
-        '5555555555554444' => ['brand' => 'Mastercard', 'decline' => null],
-        '4000000000000002' => ['brand' => 'Visa', 'decline' => 'Your card was declined.'],
-        '4000000000009995' => ['brand' => 'Visa', 'decline' => 'Your card has insufficient funds.'],
+    public const DECLINED_CARDS = [
+        '4000000000000002' => 'Your card was declined.',
+        '4000000000009995' => 'Your card has insufficient funds.',
     ];
 
     /** Every reference this gateway hands out starts with this. */
@@ -44,27 +40,56 @@ class SimulatedCardGateway
         return preg_replace('/\D/', '', $number) ?? '';
     }
 
-    public static function isTestCard(string $number): bool
+    /**
+     * A card number of plausible length whose check digit adds up (Luhn) -
+     * the same first check a real gateway makes, which catches most typos.
+     */
+    public static function isValidNumber(string $number): bool
     {
-        return array_key_exists(self::normalise($number), self::TEST_CARDS);
+        $digits = self::normalise($number);
+
+        if (strlen($digits) < 13 || strlen($digits) > 19) {
+            return false;
+        }
+
+        $sum = 0;
+
+        foreach (str_split(strrev($digits)) as $position => $digit) {
+            $value = (int) $digit * ($position % 2 === 1 ? 2 : 1);
+            $sum += $value > 9 ? $value - 9 : $value;
+        }
+
+        return $sum % 10 === 0;
+    }
+
+    public static function brand(string $number): string
+    {
+        $digits = self::normalise($number);
+
+        return match (true) {
+            str_starts_with($digits, '4') => 'Visa',
+            (bool) preg_match('/^(5[1-5]|2(2[2-9]|[3-6]\d|7[01]|720))/', $digits) => 'Mastercard',
+            (bool) preg_match('/^3[47]/', $digits) => 'American Express',
+            default => 'Card',
+        };
     }
 
     /**
-     * Charge a test card.
+     * Charge a card.
      *
      * @return array{approved: bool, reference: string, brand: string, last4: string, message: string|null}
      */
     public function charge(string $number): array
     {
         $number = self::normalise($number);
-        $card = self::TEST_CARDS[$number];
+        $decline = self::DECLINED_CARDS[$number] ?? null;
 
         return [
-            'approved' => $card['decline'] === null,
+            'approved' => $decline === null,
             'reference' => self::REFERENCE_PREFIX.Str::upper(Str::random(12)),
-            'brand' => $card['brand'],
+            'brand' => self::brand($number),
             'last4' => substr($number, -4),
-            'message' => $card['decline'],
+            'message' => $decline,
         ];
     }
 

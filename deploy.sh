@@ -421,10 +421,11 @@ MAIL_RELAY_USER=
 MAIL_RELAY_PASSWORD=
 
 # ── Card payments ──────────────────────────────────────────────────
-# "disabled": guests can't pay online; bookings are settled by hand in the
-# back office. "simulated": a test card form that moves no money - anyone
-# can then confirm a booking without paying, so only for a staging site.
-KOZY_CARD_PAYMENTS=disabled
+# "simulated": a card form that approves any valid card and moves no
+# money, to show how paying works - a booking can be confirmed without
+# being paid for. "disabled": guests can't pay online; bookings are
+# settled by hand in the back office.
+KOZY_CARD_PAYMENTS=simulated
 
 # MCB online payment gateway (Mastercard Gateway). Not used yet - fill
 # these in once MCB opens the merchant account (MCB_INTEGRATION_TODO.md).

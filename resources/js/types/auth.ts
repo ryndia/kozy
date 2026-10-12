@@ -7,6 +7,8 @@ export type User = {
     avatar?: string;
     email_verified_at: string | null;
     two_factor_enabled?: boolean;
+    /** Booked without choosing a password; still holds a random one. */
+    must_set_password?: boolean;
     created_at: string;
     updated_at: string;
     [key: string]: unknown;

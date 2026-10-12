@@ -1,5 +1,6 @@
 import { Link, router } from '@inertiajs/react';
 import { LayoutGrid, LogOut, Settings } from 'lucide-react';
+import { openLogoutReminder } from '@/components/logout-reminder';
 import {
     DropdownMenuGroup,
     DropdownMenuItem,
@@ -64,18 +65,34 @@ export function UserMenuContent({ user }: Props) {
                 </DropdownMenuItem>
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
-            <DropdownMenuItem asChild>
-                <Link
-                    className="block w-full cursor-pointer"
-                    href={logout()}
-                    as="button"
-                    onClick={handleLogout}
+            {/* A guest who booked without choosing a password is reminded to
+                choose one first - they could not log back in without it. */}
+            {user.must_set_password ? (
+                <DropdownMenuItem
+                    className="cursor-pointer"
+                    onSelect={() => {
+                        cleanup();
+                        openLogoutReminder();
+                    }}
                     data-test="logout-button"
                 >
                     <LogOut className="mr-2" />
                     Log out
-                </Link>
-            </DropdownMenuItem>
+                </DropdownMenuItem>
+            ) : (
+                <DropdownMenuItem asChild>
+                    <Link
+                        className="block w-full cursor-pointer"
+                        href={logout()}
+                        as="button"
+                        onClick={handleLogout}
+                        data-test="logout-button"
+                    >
+                        <LogOut className="mr-2" />
+                        Log out
+                    </Link>
+                </DropdownMenuItem>
+            )}
         </>
     );
 }

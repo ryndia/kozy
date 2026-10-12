@@ -15,10 +15,11 @@ use Illuminate\Http\Request;
 /**
  * Card payments.
  *
- * For now the card form is simulated (see {@see SimulatedCardGateway}): it
- * accepts test cards only and moves no money, so the whole booking flow - pay,
- * confirm, cancel, refund - works while the MCB gateway is being set up. With
- * card payments disabled, bookings are settled by hand in the back office.
+ * For now the card form is simulated (see {@see SimulatedCardGateway}): any
+ * valid card number is approved and no money moves, so the whole booking flow -
+ * pay, confirm, cancel, refund - can be shown while the MCB gateway is being
+ * set up. With card payments disabled, bookings are settled by hand in the
+ * back office.
  */
 class PaymentController extends Controller
 {
@@ -28,7 +29,7 @@ class PaymentController extends Controller
     ) {}
 
     /**
-     * Pay for a booking with a test card, confirming it on approval.
+     * Pay for a booking by card, confirming it on approval.
      */
     public function pay(Request $request): JsonResponse
     {
@@ -46,8 +47,8 @@ class PaymentController extends Controller
         $data = $request->validate([
             'card_name' => 'required|string|max:100',
             'card_number' => ['required', 'string', 'max:32', function (string $attribute, mixed $value, Closure $fail): void {
-                if (! SimulatedCardGateway::isTestCard((string) $value)) {
-                    $fail('This is a test payment form. Use one of the test cards shown - never a real card.');
+                if (! SimulatedCardGateway::isValidNumber((string) $value)) {
+                    $fail('Enter a valid card number.');
                 }
             }],
             'card_expiry' => ['required', 'string', 'regex:/^(0[1-9]|1[0-2])\s*\/\s*\d{2}$/', function (string $attribute, mixed $value, Closure $fail): void {

@@ -1,5 +1,5 @@
 import { usePage } from '@inertiajs/react';
-import { CheckCircle2, FlaskConical } from 'lucide-react';
+import { CheckCircle2 } from 'lucide-react';
 import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { toast } from 'sonner';
@@ -20,17 +20,6 @@ import { extractErrorMessage } from '@/lib/api';
 import { payBookingByCard } from '@/lib/bookings';
 import type { CardDetails, ClientBooking } from '@/lib/bookings';
 import { formatPrice } from '@/lib/property-search';
-
-/**
- * The cards the simulated gateway accepts - mirrors
- * App\Support\SimulatedCardGateway::TEST_CARDS.
- */
-const TEST_CARDS = [
-    { number: '4242 4242 4242 4242', result: 'Approved (Visa)' },
-    { number: '5555 5555 5555 4444', result: 'Approved (Mastercard)' },
-    { number: '4000 0000 0000 0002', result: 'Declined' },
-    { number: '4000 0000 0000 9995', result: 'Insufficient funds' },
-];
 
 const emptyCard: CardDetails = {
     card_name: '',
@@ -57,8 +46,8 @@ const formatExpiry = (value: string) => {
 /**
  * Pay for a stay by card.
  *
- * Card payments are simulated until the MCB gateway is integrated: the form
- * takes test cards only and no money moves. With card payments disabled the
+ * Card payments are simulated until the MCB gateway is integrated: any valid
+ * card number is approved and no money moves. With card payments disabled the
  * dialog says so instead, and the booking is settled by the Kozy team.
  */
 export default function CardPaymentDialog({
@@ -82,7 +71,7 @@ export default function CardPaymentDialog({
                     <DialogTitle>Pay for your stay</DialogTitle>
                     <DialogDescription>
                         {mode === 'simulated'
-                            ? 'Test mode: no real payment is taken.'
+                            ? 'Enter your card details to confirm your reservation.'
                             : 'Online card payment is coming soon.'}
                     </DialogDescription>
                 </DialogHeader>
@@ -210,34 +199,6 @@ function CardForm({
                         {formatPrice(amount, currency)}
                     </span>
                 </div>
-            </div>
-
-            <div className="rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900 dark:border-sky-900/60 dark:bg-sky-950/50 dark:text-sky-200">
-                <div className="flex items-center gap-2 font-medium">
-                    <FlaskConical className="size-4" aria-hidden />
-                    Use a test card — never a real one
-                </div>
-                <ul className="mt-2 grid gap-1">
-                    {TEST_CARDS.map((test) => (
-                        <li key={test.number}>
-                            <button
-                                type="button"
-                                className="font-mono underline-offset-4 hover:underline"
-                                onClick={() =>
-                                    update('card_number', test.number)
-                                }
-                            >
-                                {test.number}
-                            </button>{' '}
-                            <span className="text-sky-800/80 dark:text-sky-300/80">
-                                — {test.result}
-                            </span>
-                        </li>
-                    ))}
-                </ul>
-                <p className="mt-2 text-sky-800/80 dark:text-sky-300/80">
-                    Any name, a future expiry date and any 3-digit code.
-                </p>
             </div>
 
             <div className="grid gap-2">

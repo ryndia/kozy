@@ -117,15 +117,31 @@ class PaymentTest extends TestCase
         $this->assertSame(Payment::STATUS_PAID, $booking->fresh()->payment->status);
     }
 
-    public function test_a_card_that_is_not_a_test_card_is_refused(): void
+    public function test_any_valid_card_number_is_approved(): void
     {
         $user = User::factory()->create();
         $booking = Booking::factory()->withPayment()->create(['client_id' => $user->id]);
 
         $this->actingAs($user, 'web')
-            ->postJson('/api/payments/card', $this->card($booking, ['card_number' => '4111 1111 1111 1111']))
+            ->postJson('/api/payments/card', $this->card($booking, ['card_number' => '3782 822463 10005']))
+            ->assertOk();
+
+        $payload = $booking->fresh()->payment->provider_payload;
+
+        $this->assertSame('American Express', $payload['brand']);
+        $this->assertSame('0005', $payload['last4']);
+    }
+
+    public function test_a_mistyped_card_number_is_refused(): void
+    {
+        $user = User::factory()->create();
+        $booking = Booking::factory()->withPayment()->create(['client_id' => $user->id]);
+
+        // One digit off 4242 4242 4242 4242, so the check digit fails.
+        $this->actingAs($user, 'web')
+            ->postJson('/api/payments/card', $this->card($booking, ['card_number' => '4242 4242 4242 4243']))
             ->assertStatus(422)
-            ->assertJsonValidationErrors('card_number');
+            ->assertJsonValidationErrors(['card_number' => 'valid card number']);
 
         $this->assertSame(Payment::STATUS_PENDING, $booking->fresh()->payment->status);
     }
@@ -196,27 +212,5 @@ class PaymentTest extends TestCase
             ->assertJsonPath('card_payments', false);
 
         $this->assertSame(Payment::STATUS_PENDING, $booking->fresh()->payment->status);
-    }
-
-    public function test_card_payments_are_off_in_production_unless_switched_on(): void
-    {
-        // Read the config file afresh under each environment, with the
-        // setting itself left unset so only the default applies.
-        $default = function (string $env): mixed {
-            putenv("APP_ENV={$env}");
-            putenv('KOZY_CARD_PAYMENTS');
-            $_ENV['APP_ENV'] = $_SERVER['APP_ENV'] = $env;
-            unset($_ENV['KOZY_CARD_PAYMENTS'], $_SERVER['KOZY_CARD_PAYMENTS']);
-
-            return (require config_path('kozy.php'))['payments']['card'];
-        };
-
-        try {
-            $this->assertSame('disabled', $default('production'));
-            $this->assertSame('simulated', $default('local'));
-        } finally {
-            putenv('APP_ENV=testing');
-            $_ENV['APP_ENV'] = $_SERVER['APP_ENV'] = 'testing';
-        }
     }
 }

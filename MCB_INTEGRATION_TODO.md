@@ -2,8 +2,8 @@
 
 Kozy will take card payments through **MCB's online payment gateway**. It runs
 on Mastercard's gateway platform (MPGS, "Mastercard Gateway"). Until that is
-connected, card payments are **simulated**: the *Pay now* dialog takes test
-cards only and no money moves. See [DEPLOYMENT.md §5](DEPLOYMENT.md).
+connected, card payments are **simulated**: the *Pay now* dialog approves any
+valid card number and no money moves. See [DEPLOYMENT.md §5](DEPLOYMENT.md).
 
 ## 1. Ask MCB for
 

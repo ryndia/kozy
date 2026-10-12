@@ -123,8 +123,8 @@ What MCB needs to provide, and what changes once they do, is tracked in
 
 | Value | What guests see | Use it for |
 | --- | --- | --- |
-| `disabled` (production default) | *Pay now* says online payment is coming soon and the team will be in touch | The live site. Settle each booking by hand under **Revenue → Payments** once the guest has paid |
-| `simulated` | A test card form that accepts only the test cards it lists. No money moves, and refunds complete instantly | Local and staging. **Anyone can confirm a booking without paying in this mode**, so don't switch it on for real guests |
+| `simulated` (default) | A normal-looking card form. Any valid card number is approved, but no money moves, and refunds complete instantly | Showing how paying works. **A booking can be confirmed without being paid for in this mode** |
+| `disabled` | *Pay now* says online payment is coming soon and the team will be in touch | Taking real guests before MCB is live. Settle each booking by hand under **Revenue → Payments** once the guest has paid |
 
 After changing it, refresh the config (no asset rebuild needed):
 
