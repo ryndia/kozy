@@ -116,25 +116,112 @@ so `nginx -t` never fails on a certificate that isn't there yet.
 
 ## 5. Stripe
 
-Replace the `__SET_ME__` values in `.env`, then redeploy. `STRIPE_KEY` feeds
-`VITE_STRIPE_KEY`, which is **compiled into the JS bundle** — it needs an asset
-rebuild, not just a config cache:
+Replace the `__SET_ME__` values in `.env`, then redeploy. The publishable key is
+served to the browser by the API rather than compiled into the bundle, so a
+config refresh is enough — no asset rebuild:
 
 ```bash
-./deploy.sh --no-pull
+./deploy.sh --no-pull --no-assets
 ```
 
-Leaving the keys empty is supported; bookings then settle manually.
+Leaving the keys empty is supported; bookings then settle manually — off
+production only. Production refuses to settle a booking without Stripe.
+
+### The webhook is not optional
+
+Guests pay in Stripe Checkout's embedded form, and the booking is confirmed by
+the webhook — the browser only waits to hear about it. Without the webhook a
+guest is charged but their booking never confirms. Register this endpoint in the
+Stripe dashboard:
+
+```
+https://kozy.mu/api/payments/stripe/webhook
+```
+
+Subscribe it to **`checkout.session.completed`**, **`payment_intent.succeeded`**
+and **`payment_intent.payment_failed`**, then put its signing secret in
+`STRIPE_WEBHOOK_SECRET`. Remaining Stripe setup steps are tracked in
+[STRIPE_INTEGRATION_TODO.md](STRIPE_INTEGRATION_TODO.md). It is signature-verified against the raw request body;
+an unsigned or mis-signed call is rejected with a 401 and logged, so a wrong
+secret shows up as payments stuck pending while the log fills with rejections.
+
+Settlement is idempotent and amount-checked, so a replayed webhook racing the
+browser cannot pay a booking twice, and a webhook reporting the wrong amount is
+refused rather than accepted.
+
+The nginx CSP in `deploy.sh` allows the hosts Stripe documents for Stripe.js,
+Checkout and Link (`js.stripe.com`, `*.js.stripe.com`, `checkout.stripe.com`,
+`api.stripe.com`, `hooks.stripe.com`, `link.com`, `*.link.com`).
+
+## 5a. Guest mail and the scheduler
+
+Two emails go out to guests, both through the existing containers - no
+infrastructure change is needed:
+
+| Mail | Trigger | Runs on |
+| --- | --- | --- |
+| Booking confirmation | A payment settles (card, or a manual settlement) | `kozy-queue` |
+| Check-in reminder | `bookings:send-check-in-reminders`, daily at 09:00 | `kozy-scheduler` |
+
+Both stamp the booking once sent (`confirmation_sent_at`,
+`check_in_reminder_sent_at`), so a retried callback or a re-run of the command
+never mails the same guest twice. The reminder lead time is
+`KOZY_CHECK_IN_REMINDER_DAYS` (default 3).
+
+To see who is due without sending anything:
+
+```bash
+docker compose -f docker-compose.prod.yml exec kozy-app \
+    php artisan bookings:send-check-in-reminders --dry-run
+```
+
+If `kozy-queue` is down, confirmations queue up rather than being lost - they
+send when it comes back.
+
+## 5b. Cancellations and refunds
+
+Cancelling is notice-based. The tier boundaries live in
+`config/kozy.php` (`policies.cancellation_tiers`); the percentage kept in the
+middle tier is each property's own `cancellation_fee_percent`:
+
+| Notice given | Guest gets back |
+| --- | --- |
+| 14 days or more | Everything |
+| 7 to 13 days | Everything less the property's fee |
+| Less than 7 days | Everything less the first night |
+| On or after check-in | Nothing |
+
+**If you change a tier, change the cancellation text prefilled in the same
+config file too** — guests are quoted from the tiers but read the text, and the
+two disagreeing is how fee disputes start.
+
+Refunds are recorded the moment a booking is cancelled, then paid:
+
+- **Card payments** — refunded through Stripe's API inside the request.
+  Nothing to do.
+- **Anything else** (cash, bank transfer, a manual entry) — no API to call, so
+  these sit in **Revenue → Refunds** with a badge showing how many are owed.
+  Make the transfer, then use *Mark as paid out* with the bank reference.
+
+A payment is only marked `refunded` once the whole amount is back; a partly
+refunded payment stays `paid` with a `refunded_amount`. Admins can cancel a
+stay that has already started from the reservations list — that requires a
+reason and refunds nothing by default, though the amount can be overridden.
 
 ---
 
-## Mail — OTP delivery
+## Mail — delivery
 
-`RenterOtpNotification` is sent **synchronously inside the request** (it does
-not implement `ShouldQueue`), so the SMTP hop has to be fast and local. It is:
-the app submits to the `mailserver` container over the internal Docker network
+The app submits to the `mailserver` container over the internal Docker network
 on port 25, no auth, authorised by `PERMIT_DOCKER=network`. The mail server
 signs with DKIM and relays outward.
+
+Guest mail (confirmations and check-in reminders) implements `ShouldQueue` and
+goes out through `kozy-queue`. `RenterOtpNotification` is still sent
+**synchronously inside the request**, so that SMTP hop has to be fast and local
+— it is. Note that the guest booking flow no longer sends a code: an account is
+created straight from the booking form and the payment proves the address. The
+OTP notification now only serves the renter/admin sign-in path.
 
 ### Send-only by default
 
@@ -142,7 +229,7 @@ Same docker-mailserver configuration as visual.ryndia.space, with one
 difference: the public ports are not published. Sending needs no inbound port,
 so kozy's mail server coexists with visual's on one VPS. Consequences:
 
-- OTP mail goes out, DKIM-signed. ✅
+- Outbound mail goes out, DKIM-signed. ✅
 - Nothing can be *received* at `@kozy.ryndia.space` (no MX, no IMAP).
 - DMARC starts at `p=none` — with no inbox, aggregate reports can't be read.
 
@@ -318,7 +405,7 @@ empty `/etc/opendkim/SigningTable` and recreates the container for you.
 `kozy.ryndia.space`, and `SESSION_SECURE_COOKIE=true` requires HTTPS.
 
 **Stripe key change has no effect in the browser** — rebuild assets
-(`./deploy.sh --no-pull`); `VITE_STRIPE_KEY` is baked into the bundle.
+(`./deploy.sh --no-pull`).
 
 ---
 

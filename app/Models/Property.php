@@ -15,7 +15,7 @@ class Property extends Model
     use HasFactory;
 
     protected $fillable = [
-        'title', 'slug', 'description', 'address', 'price_per_night', 'currency', 'max_guests', 'bedrooms', 'kitchens', 'bathrooms', 'amenities', 'features', 'status', 'lat', 'lng', 'check_in', 'check_out',
+        'title', 'slug', 'description', 'address', 'price_per_night', 'currency', 'max_guests', 'bedrooms', 'kitchens', 'bathrooms', 'amenities', 'features', 'status', 'lat', 'lng', 'check_in', 'check_out', 'terms_and_conditions', 'cancellation_policy', 'cancellation_fee_percent',
     ];
 
     protected $casts = [
@@ -23,6 +23,7 @@ class Property extends Model
         'features' => 'array',
         'check_in' => 'string',
         'check_out' => 'string',
+        'cancellation_fee_percent' => 'decimal:2',
     ];
 
     /**
@@ -165,5 +166,26 @@ class Property extends Model
                 return null;
             })
             ->filter();
+    }
+
+    /**
+     * The terms a guest agrees to for this property, falling back to the house
+     * defaults so a listing is never published with no terms at all.
+     */
+    public function terms(): string
+    {
+        return trim((string) $this->terms_and_conditions) ?: (string) config('kozy.policies.terms');
+    }
+
+    public function cancellationPolicy(): string
+    {
+        return trim((string) $this->cancellation_policy) ?: (string) config('kozy.policies.cancellation');
+    }
+
+    public function cancellationFeePercent(): float
+    {
+        return $this->cancellation_fee_percent !== null
+            ? (float) $this->cancellation_fee_percent
+            : (float) config('kozy.policies.cancellation_fee_percent', 0);
     }
 }

@@ -5,13 +5,13 @@ namespace App\Http\Controllers;
 use App\Actions\Bookings\CreateBookingAction;
 use App\Enums\UserRole;
 use App\Models\User;
-use App\Notifications\RenterOtpNotification;
 use App\Support\AuthRedirect;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Notification;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rules\Password;
@@ -20,9 +20,14 @@ use Inertia\Inertia;
 use Inertia\Response;
 
 /**
- * Sign-up flow for guests: verify the email with a one-time code, then set a
- * password. Guests who already have an account authenticate with their password
- * instead - this flow never overwrites the credentials of an existing account.
+ * Sign-up flow for guests: a name and an email are enough to reserve. The
+ * account and the booking are created there and then, the guest goes straight
+ * to paying for the room, and chooses a password once they have paid. Guests
+ * who already have an account authenticate with their password instead - this
+ * flow never overwrites the credentials of an existing account.
+ *
+ * There is no email verification code. The payment, and the confirmation mail
+ * that follows it, are what show the address is real.
  */
 class ClientAccessController extends Controller
 {
@@ -66,24 +71,51 @@ class ClientAccessController extends Controller
             ]);
         }
 
-        $code = str_pad((string) random_int(100000, 999999), 6, '0', STR_PAD_LEFT);
+        // A new guest gets an account straight away, holding a random
+        // placeholder password until they choose one after paying. The account
+        // and the booking stand or fall together: dates that turn out to be
+        // taken leave no half-made account behind.
+        try {
+            [$user, $booking] = DB::transaction(function () use ($data, $email, $reservation): array {
+                $user = User::query()->create([
+                    'name' => $data['name'],
+                    'email' => $email,
+                    'password' => Str::random(64),
+                    'must_set_password' => true,
+                    'role' => UserRole::USER->value,
+                    'otp_verified_at' => now(),
+                ]);
 
-        $request->session()->put(self::SESSION_KEY, [
-            'name' => $data['name'],
-            'email' => $email,
-            'otp' => $code,
-            'expires_at' => now()->addMinutes(10)->timestamp,
-            'verified' => false,
-            'intended' => $intended,
-            'reservation' => $reservation,
-        ]);
+                $booking = is_array($reservation)
+                    ? $this->createBooking->execute($reservation, $user)[0]
+                    : null;
 
-        Notification::route('mail', $email)->notify(new RenterOtpNotification($code));
+                return [$user, $booking];
+            });
+        } catch (UniqueConstraintViolationException) {
+            // A double submit raced us to the same email. The account exists
+            // now, so treat this exactly like an existing email.
+            throw ValidationException::withMessages([
+                'email' => 'This email already has an account. Please log in to continue.',
+            ]);
+        }
 
+        Auth::login($user, true);
+        $request->session()->regenerate();
+        $request->session()->put(self::SESSION_KEY, ['intended' => $intended]);
+
+        // With a stay to pay for, the guest lands on its payment; otherwise
+        // there is nothing to pay and they choose their password now.
         return response()->json([
             'account_exists' => false,
-            'message' => 'A verification code has been sent to your email.',
             'email' => $email,
+            'booking_id' => $booking?->getKey(),
+            'message' => $booking
+                ? 'Your dates are reserved. Complete the payment to confirm them.'
+                : 'Choose a password to finish creating your account.',
+            'redirect_url' => $booking
+                ? route('client.bookings', ['pay' => $booking->getKey()], absolute: false)
+                : route('client.auth.password', absolute: false),
         ]);
     }
 
@@ -142,52 +174,23 @@ class ClientAccessController extends Controller
         ]);
     }
 
-    public function verify(Request $request): JsonResponse
-    {
-        $data = $request->validate([
-            'otp' => ['required', 'digits:6'],
-        ]);
-
-        $flow = $this->getFlow($request);
-
-        if (! $flow || ! ($flow['otp'] ?? null)) {
-            throw ValidationException::withMessages([
-                'otp' => 'Your verification session has expired. Please start again.',
-            ]);
-        }
-
-        if (now()->timestamp > (int) ($flow['expires_at'] ?? 0)) {
-            $request->session()->forget(self::SESSION_KEY);
-
-            throw ValidationException::withMessages([
-                'otp' => 'Your verification code has expired. Please request a new one.',
-            ]);
-        }
-
-        if (! hash_equals((string) $flow['otp'], $data['otp'])) {
-            throw ValidationException::withMessages([
-                'otp' => 'The verification code is invalid.',
-            ]);
-        }
-
-        $flow['verified'] = true;
-        $request->session()->put(self::SESSION_KEY, $flow);
-
-        return response()->json([
-            'redirect_url' => route('client.auth.password', absolute: false),
-        ]);
-    }
-
+    /**
+     * Where a guest who paid first chooses their password.
+     */
     public function showPassword(Request $request): Response|RedirectResponse
     {
-        $flow = $this->getVerifiedFlow($request);
+        $user = $request->user();
 
-        if (! $flow) {
+        if (! $user) {
             return redirect()->route('login');
         }
 
+        if (! $user->must_set_password) {
+            return redirect()->route('client.bookings');
+        }
+
         return Inertia::render('auth/set-password', [
-            'email' => $flow['email'],
+            'email' => $user->email,
             'passwordRules' => Password::defaults()->toPasswordRulesString(),
         ]);
     }
@@ -198,40 +201,22 @@ class ClientAccessController extends Controller
             'password' => ['required', 'confirmed', Password::defaults()],
         ]);
 
-        $flow = $this->getVerifiedFlow($request);
+        $user = $request->user();
 
-        if (! $flow) {
+        // Only the placeholder may be replaced here. Changing a real password
+        // belongs to the settings page, which asks for the current one first.
+        if (! $user || ! $user->must_set_password) {
             throw ValidationException::withMessages([
-                'password' => 'Your verification session has expired. Please start again.',
+                'password' => 'Your password is already set. Change it from your account settings instead.',
             ]);
         }
 
-        if (User::query()->where('email', $flow['email'])->exists()) {
-            $request->session()->forget(self::SESSION_KEY);
-
-            throw ValidationException::withMessages([
-                'password' => 'An account already exists for this email. Please log in with your password instead.',
-            ]);
-        }
-
-        $user = User::query()->create([
-            'name' => $flow['name'],
-            'email' => $flow['email'],
+        $user->forceFill([
             'password' => $data['password'],
-            'role' => UserRole::USER->value,
-            'otp_verified_at' => now(),
-        ]);
+            'must_set_password' => false,
+        ])->save();
 
-        Auth::login($user, true);
-        $request->session()->regenerate();
-
-        $redirectUrl = $this->normalizeIntended($flow['intended'] ?? null, $user);
-
-        if (is_array($flow['reservation'] ?? null)) {
-            $this->createBooking->execute($flow['reservation'], $user);
-            $redirectUrl = route('client.bookings', absolute: false);
-        }
-
+        $redirectUrl = $this->normalizeIntended($this->getFlow($request)['intended'] ?? null, $user);
         $request->session()->forget(self::SESSION_KEY);
 
         return response()->json([
@@ -244,17 +229,6 @@ class ClientAccessController extends Controller
         $flow = $request->session()->get(self::SESSION_KEY);
 
         return is_array($flow) ? $flow : null;
-    }
-
-    protected function getVerifiedFlow(Request $request): ?array
-    {
-        $flow = $this->getFlow($request);
-
-        if (! $flow || ! ($flow['verified'] ?? false)) {
-            return null;
-        }
-
-        return $flow;
     }
 
     /**

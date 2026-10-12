@@ -2,12 +2,56 @@ import { apiGet, apiPost } from '@/lib/api';
 
 export type BookingStage = 'upcoming' | 'staying' | 'past' | 'cancelled';
 
+/** What a cancellation would cost, quoted before the guest commits. */
+export type CancellationQuote = {
+    paid: number;
+    fee: number;
+    refund: number;
+    currency: string;
+    days_notice: number;
+    rule: 'full' | 'fee' | 'first_night' | 'none' | 'unpaid';
+    explanation: string;
+    full_refund: boolean;
+};
+
+/** What the API hands back when a card payment is started. */
+export type PaymentIntentResponse = {
+    client_secret: string;
+    payment_intent_id: string;
+    publishable_key: string;
+    amount: number;
+    currency: string;
+    stripe_configured: true;
+    /** Set when Stripe had already taken the money and the API settled it. */
+    already_paid?: boolean;
+    message?: string;
+};
+
+/** What the API hands back when a Checkout Session is opened. */
+export type CheckoutSessionResponse = {
+    client_secret: string;
+    publishable_key: string;
+    amount: number;
+    currency: string;
+    stripe_configured: true;
+};
+
+export type ClientBookingRefund = {
+    id: number;
+    amount: number;
+    fee_amount: number;
+    currency: string;
+    status: 'pending' | 'completed' | 'failed';
+    processed_at?: string | null;
+};
+
 export type ClientBookingPayment = {
     id?: number;
     amount?: number;
     method?: string | null;
     status?: string | null;
     transaction_ref?: string | null;
+    refunded_amount?: number;
     paid_at?: string | null;
 };
 
@@ -35,6 +79,9 @@ export type ClientBooking = {
     can_review?: boolean;
     receipt_url?: string;
     payment?: ClientBookingPayment | null;
+    refunds?: ClientBookingRefund[] | null;
+    cancelled_at?: string | null;
+    cancellation_reason?: string | null;
     review?: ClientBookingReview | null;
     property?: {
         id?: number;
@@ -134,12 +181,44 @@ export async function fetchClientBookings(): Promise<{
     };
 }
 
-export function cancelClientBooking(bookingId: number) {
-    return apiPost(`/api/client/bookings/${bookingId}/cancel`);
+/**
+ * What the guest would get back, so the confirmation dialog can say so before
+ * anything is cancelled.
+ */
+export function fetchCancellationQuote(
+    bookingId: number,
+): Promise<{ quote: CancellationQuote; can_cancel: boolean }> {
+    return apiGet(`/api/client/bookings/${bookingId}/cancellation-quote`);
 }
 
-export function createPaymentIntent(bookingId: number) {
+export function cancelClientBooking(bookingId: number, reason?: string) {
+    return apiPost(`/api/client/bookings/${bookingId}/cancel`, {
+        ...(reason?.trim() ? { reason: reason.trim() } : {}),
+    });
+}
+
+export function createPaymentIntent(
+    bookingId: number,
+): Promise<PaymentIntentResponse> {
     return apiPost('/api/payments/create-intent', { booking_id: bookingId });
+}
+
+/**
+ * Open a Stripe Checkout Session for a booking; its client secret drives the
+ * embedded payment form.
+ */
+export function createCheckoutSession(
+    bookingId: number,
+): Promise<CheckoutSessionResponse> {
+    return apiPost('/api/payments/checkout-session', { booking_id: bookingId });
+}
+
+export async function fetchClientBooking(
+    bookingId: number,
+): Promise<ClientBooking> {
+    const response = await apiGet(`/api/client/bookings/${bookingId}`);
+
+    return response.booking;
 }
 
 export function confirmBookingPayment(

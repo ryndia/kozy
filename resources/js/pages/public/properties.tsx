@@ -1,14 +1,15 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { usePage } from '@inertiajs/react';
 import AppLogoIcon from '@/components/app-logo-icon';
+import CurrencySwitcher from '@/components/currency-switcher';
 import DestinationAutocomplete from '@/components/destination-autocomplete';
+import PriceDisplay from '@/components/price-display';
 import PublicThemeToggle from '@/components/public-theme-toggle';
 import { apiGet } from '@/lib/api';
 import {
     buildPropertiesUrl,
     buildPropertyUrl,
     defaultPropertySearchFilters,
-    formatPrice,
     formatRoomLine,
     nextIsoDate,
     normalizePropertyImage,
@@ -136,6 +137,7 @@ export default function PropertiesPage() {
                     </nav>
 
                     <div className="flex items-center gap-3">
+                        <CurrencySwitcher />
                         <PublicThemeToggle />
                         {authUser ? (
                             <a
@@ -381,14 +383,15 @@ export default function PropertiesPage() {
                                             </p>
                                         ) : null}
                                         <div className="mt-3 flex items-center justify-between">
-                                            <span className="text-sm font-medium text-foreground">
-                                                From{' '}
-                                                {formatPrice(
-                                                    p.price_per_night,
-                                                    p.currency,
+                                            <PriceDisplay
+                                                amount={Number(
+                                                    p.price_per_night ?? 0,
                                                 )}
-                                                /night
-                                            </span>
+                                                currency={p.currency ?? 'MUR'}
+                                                suffix="/ night"
+                                                vatStyle="short"
+                                                className="text-sm font-medium text-foreground"
+                                            />
                                             <span className="text-sm font-medium text-foreground">
                                                 View stay →
                                             </span>

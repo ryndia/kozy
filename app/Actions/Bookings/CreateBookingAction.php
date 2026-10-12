@@ -74,10 +74,12 @@ class CreateBookingAction
                 'total_price' => $total,
             ]);
 
+            // The method is left open until the guest actually pays, so the
+            // column records what settled the booking rather than a guess.
             $payment = Payment::query()->create([
                 'booking_id' => $booking->id,
                 'amount' => $total,
-                'method' => 'stripe',
+                'method' => null,
                 'status' => Payment::STATUS_PENDING,
             ]);
 

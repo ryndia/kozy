@@ -5,6 +5,7 @@ namespace Tests\Feature\Bookings;
 use App\Models\Booking;
 use App\Models\Payment;
 use App\Models\Property;
+use App\Models\Refund;
 use App\Models\Review;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -86,8 +87,19 @@ class ClientDashboardTest extends TestCase
             ->assertOk()
             ->assertJsonPath('booking.status', Booking::STATUS_CANCELLED);
 
-        $this->assertSame(Booking::STATUS_CANCELLED, $booking->fresh()->status);
-        $this->assertSame(Payment::STATUS_REFUNDED, $booking->fresh()->payment->status);
+        $booking->refresh();
+
+        $this->assertSame(Booking::STATUS_CANCELLED, $booking->status);
+        $this->assertNotNull($booking->cancelled_at);
+
+        // The refund is owed, not yet sent: no provider can return this
+        // payment automatically, so it waits in the payout queue and the
+        // payment stays paid until the money actually goes back.
+        $refund = $booking->refunds()->sole();
+
+        $this->assertSame(Refund::STATUS_PENDING, $refund->status);
+        $this->assertSame(Payment::STATUS_PAID, $booking->payment->status);
+        $this->assertSame(0.0, (float) $booking->payment->refunded_amount);
     }
 
     public function test_a_started_stay_can_no_longer_be_cancelled(): void

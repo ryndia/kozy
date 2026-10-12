@@ -1,20 +1,13 @@
-import { Head, Link } from '@inertiajs/react';
+import { Head, Link, usePage } from '@inertiajs/react';
 import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
+import CancelBookingDialog from '@/components/cancel-booking-dialog';
+import PriceDisplay from '@/components/price-display';
+import StripePaymentDialog from '@/components/stripe-payment-dialog';
 import { Button } from '@/components/ui/button';
-import {
-    Dialog,
-    DialogContent,
-    DialogDescription,
-    DialogFooter,
-    DialogHeader,
-    DialogTitle,
-} from '@/components/ui/dialog';
 import { extractErrorMessage } from '@/lib/api';
 import {
     cancelClientBooking,
-    confirmBookingPayment,
-    createPaymentIntent,
     emptyBookingSummary,
     fetchClientBookings,
     formatStayDate,
@@ -51,8 +44,13 @@ export default function MyBookings() {
     const [cancelTarget, setCancelTarget] = useState<ClientBooking | null>(
         null,
     );
-    const [clientSecrets, setClientSecrets] = useState<Record<number, string>>(
-        {},
+    const [payTarget, setPayTarget] = useState<ClientBooking | null>(null);
+    const [justPaid, setJustPaid] = useState(false);
+
+    // Guests who reserved from a property page pay first and choose their
+    // password afterwards; until then their account has only a placeholder.
+    const needsPassword = Boolean(
+        usePage().props.auth?.user?.must_set_password,
     );
     const [reviewDrafts, setReviewDrafts] = useState<
         Record<number, { rating: string; comment: string }>
@@ -78,10 +76,57 @@ export default function MyBookings() {
 
     useEffect(() => {
         fetchClientBookings()
-            .then(applyBookings)
+            .then((response) => {
+                applyBookings(response);
+
+                // Arriving from a property page: open the payment for the stay
+                // just reserved, and drop the parameter so a reload does not
+                // reopen it.
+                const params = new URLSearchParams(window.location.search);
+                const payId = Number(params.get('pay'));
+
+                if (!payId) {
+                    return;
+                }
+
+                params.delete('pay');
+                const query = params.toString();
+                window.history.replaceState(
+                    window.history.state,
+                    '',
+                    window.location.pathname + (query ? `?${query}` : ''),
+                );
+
+                const target = response.bookings.find(
+                    (booking) => booking.id === payId && booking.can_pay,
+                );
+
+                if (target) {
+                    setPayTarget(target);
+                }
+            })
             .catch((error) => toast.error(extractErrorMessage(error)))
             .finally(() => setLoading(false));
     }, []);
+
+    const handlePaid = async () => {
+        setJustPaid(true);
+        await loadBookings();
+    };
+
+    const handlePayDialogChange = (open: boolean) => {
+        if (open) {
+            return;
+        }
+
+        setPayTarget(null);
+
+        // Paid first, password second: closing the confirmation takes a new
+        // guest straight on to choosing one.
+        if (justPaid && needsPassword) {
+            window.location.href = '/client/auth/password';
+        }
+    };
 
     const visibleBookings = useMemo(() => {
         if (filter === 'all') {
@@ -106,65 +151,7 @@ export default function MyBookings() {
         }));
     };
 
-    /**
-     * Start a card payment when Stripe is configured; otherwise fall back to the
-     * manual settlement the API allows outside production.
-     */
-    const handlePay = async (booking: ClientBooking) => {
-        setBusyBookingId(booking.id);
-
-        try {
-            const intent = await createPaymentIntent(booking.id);
-
-            if (intent.client_secret) {
-                setClientSecrets((current) => ({
-                    ...current,
-                    [booking.id]: intent.client_secret,
-                }));
-                toast.success(
-                    'Card payment started. Complete it with your card details.',
-                );
-
-                return;
-            }
-
-            await settlePayment(booking, intent.payment_intent_id);
-        } catch (error) {
-            const stripeMissing =
-                error &&
-                typeof error === 'object' &&
-                (error as { stripe_configured?: boolean }).stripe_configured ===
-                    false;
-
-            if (stripeMissing) {
-                await settlePayment(booking);
-
-                return;
-            }
-
-            toast.error(extractErrorMessage(error));
-        } finally {
-            setBusyBookingId(null);
-        }
-    };
-
-    const settlePayment = async (
-        booking: ClientBooking,
-        paymentIntentId?: string,
-    ) => {
-        try {
-            const response = await confirmBookingPayment(
-                booking.id,
-                paymentIntentId,
-            );
-            toast.success(response.message ?? 'Payment recorded.');
-            await loadBookings();
-        } catch (error) {
-            toast.error(extractErrorMessage(error));
-        }
-    };
-
-    const handleCancel = async () => {
+    const handleCancel = async (reason: string) => {
         if (!cancelTarget) {
             return;
         }
@@ -172,7 +159,7 @@ export default function MyBookings() {
         setBusyBookingId(cancelTarget.id);
 
         try {
-            const response = await cancelClientBooking(cancelTarget.id);
+            const response = await cancelClientBooking(cancelTarget.id, reason);
             toast.success(response.message ?? 'Reservation cancelled.');
             setCancelTarget(null);
             await loadBookings();
@@ -207,6 +194,18 @@ export default function MyBookings() {
             <Head title="My bookings" />
 
             <div className="flex h-full flex-1 flex-col gap-6 p-4">
+                {needsPassword ? (
+                    <div className="flex flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 sm:flex-row sm:items-center sm:justify-between dark:border-amber-900/60 dark:bg-amber-950/50 dark:text-amber-200">
+                        <span>
+                            Choose a password for your account so you can sign
+                            in and manage your bookings later.
+                        </span>
+                        <Button size="sm" asChild>
+                            <a href="/client/auth/password">Choose password</a>
+                        </Button>
+                    </div>
+                ) : null}
+
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
                     <div>
                         <p className="text-xs tracking-[0.22em] text-muted-foreground uppercase">
@@ -362,11 +361,15 @@ export default function MyBookings() {
                                                     <div className="text-[11px] tracking-[0.16em] text-muted-foreground uppercase">
                                                         Total
                                                     </div>
-                                                    <div className="mt-1 text-sm font-medium">
-                                                        {formatPrice(
-                                                            booking.total_price,
-                                                            currency,
-                                                        )}
+                                                    <div className="mt-1">
+                                                        <PriceDisplay
+                                                            amount={Number(
+                                                                booking.total_price ??
+                                                                    0,
+                                                            )}
+                                                            currency={currency}
+                                                            className="text-sm font-medium"
+                                                        />
                                                     </div>
                                                 </div>
                                             </div>
@@ -430,15 +433,13 @@ export default function MyBookings() {
                                                             <Button
                                                                 size="sm"
                                                                 onClick={() =>
-                                                                    handlePay(
+                                                                    setPayTarget(
                                                                         booking,
                                                                     )
                                                                 }
                                                                 disabled={busy}
                                                             >
-                                                                {busy
-                                                                    ? 'Processing…'
-                                                                    : 'Pay now'}
+                                                                Pay now
                                                             </Button>
                                                         ) : null}
                                                         <Button
@@ -487,42 +488,6 @@ export default function MyBookings() {
                                                             </Button>
                                                         ) : null}
                                                     </div>
-
-                                                    {clientSecrets[
-                                                        booking.id
-                                                    ] ? (
-                                                        <div className="mt-4 rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-xs text-sky-900 dark:border-sky-900/60 dark:bg-sky-950/50 dark:text-sky-100">
-                                                            <div className="font-semibold tracking-[0.14em] uppercase">
-                                                                Stripe client
-                                                                secret
-                                                            </div>
-                                                            <div className="mt-2 break-all">
-                                                                {
-                                                                    clientSecrets[
-                                                                        booking
-                                                                            .id
-                                                                    ]
-                                                                }
-                                                            </div>
-                                                            <Button
-                                                                size="sm"
-                                                                className="mt-3"
-                                                                onClick={() =>
-                                                                    settlePayment(
-                                                                        booking,
-                                                                        booking
-                                                                            .payment
-                                                                            ?.transaction_ref ??
-                                                                            undefined,
-                                                                    )
-                                                                }
-                                                                disabled={busy}
-                                                            >
-                                                                I have completed
-                                                                the payment
-                                                            </Button>
-                                                        </div>
-                                                    ) : null}
                                                 </div>
 
                                                 <div className="rounded-lg border border-border bg-muted/40 p-5">
@@ -688,39 +653,19 @@ export default function MyBookings() {
                 </div>
             </div>
 
-            <Dialog
-                open={Boolean(cancelTarget)}
+            <StripePaymentDialog
+                booking={payTarget}
+                onOpenChange={handlePayDialogChange}
+                onPaid={handlePaid}
+                doneLabel={needsPassword ? 'Choose your password' : 'Done'}
+            />
+
+            <CancelBookingDialog
+                booking={cancelTarget}
+                busy={busyBookingId === cancelTarget?.id}
                 onOpenChange={(open) => !open && setCancelTarget(null)}
-            >
-                <DialogContent>
-                    <DialogHeader>
-                        <DialogTitle>Cancel this reservation?</DialogTitle>
-                        <DialogDescription>
-                            {cancelTarget?.property?.title} from{' '}
-                            {formatStayDate(cancelTarget?.check_in)} to{' '}
-                            {formatStayDate(cancelTarget?.check_out)} will be
-                            released. Settled payments are marked for refund.
-                        </DialogDescription>
-                    </DialogHeader>
-                    <DialogFooter>
-                        <Button
-                            variant="outline"
-                            onClick={() => setCancelTarget(null)}
-                        >
-                            Keep booking
-                        </Button>
-                        <Button
-                            variant="destructive"
-                            onClick={handleCancel}
-                            disabled={busyBookingId === cancelTarget?.id}
-                        >
-                            {busyBookingId === cancelTarget?.id
-                                ? 'Cancelling…'
-                                : 'Cancel booking'}
-                        </Button>
-                    </DialogFooter>
-                </DialogContent>
-            </Dialog>
+                onConfirm={handleCancel}
+            />
         </>
     );
 }

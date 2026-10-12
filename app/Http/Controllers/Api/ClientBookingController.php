@@ -49,16 +49,44 @@ class ClientBookingController extends Controller
         ]);
     }
 
-    public function cancel(Request $request, int $id): JsonResponse
+    /**
+     * What cancelling would cost, so the guest sees it before they commit.
+     */
+    public function cancellationQuote(Request $request, int $id): JsonResponse
     {
         $booking = $this->bookingsFor($request)->findOrFail($id);
 
-        $this->cancelBooking->execute($booking);
+        return response()->json([
+            'quote' => $this->cancelBooking->quote($booking)->toArray(),
+            'can_cancel' => $booking->isCancellable(),
+        ]);
+    }
 
-        $booking->load(['property.images', 'payment', 'review']);
+    public function cancel(Request $request, int $id): JsonResponse
+    {
+        $data = $request->validate([
+            'reason' => ['nullable', 'string', 'max:500'],
+        ]);
+
+        $booking = $this->bookingsFor($request)->findOrFail($id);
+
+        // Quoted before the cancellation, because afterwards there is nothing
+        // left to quote - the guest is told exactly what was applied.
+        $quote = $this->cancelBooking->quote($booking);
+
+        $this->cancelBooking->execute($booking, $request->user(), $data['reason'] ?? null);
+
+        $booking->load(['property.images', 'payment', 'review', 'refunds']);
 
         return response()->json([
-            'message' => 'Your reservation has been cancelled.',
+            'message' => $quote->hasRefund()
+                ? sprintf(
+                    'Your reservation has been cancelled. %s %s will be refunded.',
+                    $quote->currency,
+                    number_format($quote->refund, 2),
+                )
+                : 'Your reservation has been cancelled.',
+            'quote' => $quote->toArray(),
             'booking' => (new BookingResource($booking))->resolve(),
         ]);
     }
@@ -83,7 +111,7 @@ class ClientBookingController extends Controller
     protected function bookingsFor(Request $request)
     {
         return Booking::query()
-            ->with(['property.images', 'payment', 'review'])
+            ->with(['property.images', 'payment', 'review', 'refunds'])
             ->where('client_id', $request->user()->id);
     }
 

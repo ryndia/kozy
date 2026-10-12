@@ -2,9 +2,9 @@
 
 namespace Tests\Feature\Auth;
 
+use App\Models\Booking;
 use App\Models\Property;
 use App\Models\User;
-use App\Notifications\RenterOtpNotification;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Notification;
@@ -22,7 +22,7 @@ class ClientAccessTest extends TestCase
             ->assertInertia(fn (AssertableInertia $page) => $page->component('auth/login'));
     }
 
-    public function test_an_existing_email_is_asked_for_its_password_instead_of_an_otp(): void
+    public function test_an_existing_email_is_asked_for_its_password_instead_of_signing_up(): void
     {
         Notification::fake();
 
@@ -64,7 +64,7 @@ class ClientAccessTest extends TestCase
         $this->assertGuest();
     }
 
-    public function test_a_new_guest_signs_up_with_an_otp_and_a_password(): void
+    public function test_a_new_guest_without_a_stay_chooses_their_password_straight_away(): void
     {
         Notification::fake();
 
@@ -73,13 +73,18 @@ class ClientAccessTest extends TestCase
             'email' => 'new@example.com',
         ])
             ->assertOk()
-            ->assertJsonPath('account_exists', false);
+            ->assertJsonPath('account_exists', false)
+            ->assertJsonPath('redirect_url', '/client/auth/password');
 
-        Notification::assertSentOnDemand(RenterOtpNotification::class);
+        // Nothing is mailed mid-signup - no verification code.
+        Notification::assertNothingSent();
 
-        $otp = session('client_auth_flow.otp');
+        $user = User::query()->where('email', 'new@example.com')->firstOrFail();
 
-        $this->postJson(route('client.auth.verify'), ['otp' => $otp])->assertOk();
+        $this->assertAuthenticatedAs($user);
+        $this->assertTrue($user->must_set_password);
+        $this->assertSame('user', $user->role);
+
         $this->get(route('client.auth.password'))->assertOk();
 
         $this->postJson(route('client.auth.password.store'), [
@@ -89,32 +94,53 @@ class ClientAccessTest extends TestCase
             ->assertOk()
             ->assertJsonPath('redirect_url', '/client/bookings');
 
-        $user = User::query()->where('email', 'new@example.com')->firstOrFail();
+        $user->refresh();
 
-        $this->assertSame('user', $user->role);
-        $this->assertAuthenticatedAs($user);
+        $this->assertFalse($user->must_set_password);
+        $this->assertTrue(Hash::check('a-strong-password', $user->password));
     }
 
-    public function test_a_guest_signing_up_from_a_property_page_gets_their_reservation(): void
+    public function test_a_guest_reserving_from_a_property_page_goes_straight_to_payment(): void
     {
         Notification::fake();
 
         $property = Property::factory()->create(['price_per_night' => 150, 'max_guests' => 4]);
-        $reservation = [
-            'property_id' => $property->id,
-            'check_in' => today()->addDays(2)->toDateString(),
-            'check_out' => today()->addDays(4)->toDateString(),
-            'guests' => 3,
-        ];
 
-        $this->postJson(route('client.auth.start'), [
+        $response = $this->postJson(route('client.auth.start'), [
             'name' => 'Booking Guest',
             'email' => 'booker@example.com',
-            'reservation' => $reservation,
-        ])->assertOk();
+            'reservation' => [
+                'property_id' => $property->id,
+                'check_in' => today()->addDays(2)->toDateString(),
+                'check_out' => today()->addDays(4)->toDateString(),
+                'guests' => 3,
+            ],
+        ])
+            ->assertOk()
+            ->assertJsonPath('account_exists', false);
 
-        $this->postJson(route('client.auth.verify'), ['otp' => session('client_auth_flow.otp')])->assertOk();
+        $user = User::query()->where('email', 'booker@example.com')->firstOrFail();
+        $booking = Booking::query()->where('client_id', $user->id)->sole();
 
+        // The booking exists before any password, and the guest lands on its
+        // payment.
+        $response->assertJsonPath('booking_id', $booking->id)
+            ->assertJsonPath('redirect_url', "/client/bookings?pay={$booking->id}");
+
+        $this->assertSame($property->id, $booking->property_id);
+        $this->assertSame(3, $booking->guests);
+        $this->assertSame(300.0, (float) $booking->total_price);
+        $this->assertSame(Booking::STATUS_PENDING, $booking->status);
+
+        $this->assertAuthenticatedAs($user);
+        $this->assertTrue($user->must_set_password);
+
+        // Paying is open to them right away.
+        $this->getJson("/api/client/bookings/{$booking->id}")
+            ->assertOk()
+            ->assertJsonPath('booking.can_pay', true);
+
+        // And the password comes afterwards.
         $this->postJson(route('client.auth.password.store'), [
             'password' => 'a-strong-password',
             'password_confirmation' => 'a-strong-password',
@@ -122,30 +148,66 @@ class ClientAccessTest extends TestCase
             ->assertOk()
             ->assertJsonPath('redirect_url', '/client/bookings');
 
-        $user = User::query()->where('email', 'booker@example.com')->firstOrFail();
-
-        $this->assertDatabaseHas('bookings', [
-            'client_id' => $user->id,
-            'property_id' => $property->id,
-            'guests' => 3,
-            'total_price' => 300,
-        ]);
+        $this->assertFalse($user->fresh()->must_set_password);
     }
 
-    public function test_an_invalid_otp_is_rejected(): void
+    public function test_dates_that_are_taken_leave_no_account_behind(): void
     {
-        Notification::fake();
+        $property = Property::factory()->create(['max_guests' => 4]);
+        $checkIn = today()->addDays(5);
+
+        Booking::factory()->create([
+            'property_id' => $property->id,
+            'check_in' => $checkIn->toDateString(),
+            'check_out' => $checkIn->copy()->addDays(3)->toDateString(),
+            'status' => Booking::STATUS_CONFIRMED,
+        ]);
 
         $this->postJson(route('client.auth.start'), [
-            'name' => 'New Guest',
-            'email' => 'new@example.com',
-        ])->assertOk();
+            'name' => 'Late Guest',
+            'email' => 'late@example.com',
+            'reservation' => [
+                'property_id' => $property->id,
+                'check_in' => $checkIn->toDateString(),
+                'check_out' => $checkIn->copy()->addDays(2)->toDateString(),
+                'guests' => 2,
+            ],
+        ])->assertStatus(422);
 
-        $this->postJson(route('client.auth.verify'), ['otp' => '000000'])
-            ->assertStatus(422)
-            ->assertJsonValidationErrors('otp');
+        $this->assertDatabaseMissing('users', ['email' => 'late@example.com']);
+        $this->assertGuest();
+    }
 
+    public function test_the_password_page_is_only_for_accounts_still_waiting_for_one(): void
+    {
         $this->get(route('client.auth.password'))->assertRedirect(route('login'));
+
+        $this->actingAs(User::factory()->create());
+
+        $this->get(route('client.auth.password'))->assertRedirect(route('client.bookings'));
+    }
+
+    public function test_the_password_step_cannot_replace_a_password_already_chosen(): void
+    {
+        $user = User::factory()->create(['password' => 'original-password']);
+        $original = $user->password;
+
+        $this->actingAs($user)
+            ->postJson(route('client.auth.password.store'), [
+                'password' => 'a-new-strong-password',
+                'password_confirmation' => 'a-new-strong-password',
+            ])
+            ->assertStatus(422);
+
+        $this->assertSame($original, $user->fresh()->password);
+    }
+
+    public function test_the_verification_code_step_no_longer_exists(): void
+    {
+        $this->assertFalse(
+            app('router')->has('client.auth.verify'),
+            'The guest booking flow must not route through a verification code.',
+        );
     }
 
     public function test_a_client_logs_in_with_a_password_and_reserves_in_one_step(): void

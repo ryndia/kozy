@@ -2,12 +2,19 @@
 
 namespace App\Http\Resources;
 
+use App\Models\Property;
+use App\Support\Pricing;
 use Illuminate\Http\Resources\Json\JsonResource;
 
+/**
+ * @mixin Property
+ */
 class PropertyResource extends JsonResource
 {
     /**
      * Transform the resource into an array.
+     *
+     * @return array<string, mixed>
      */
     public function toArray($request): array
     {
@@ -23,6 +30,12 @@ class PropertyResource extends JsonResource
             'check_out' => $this->check_out ? $this->check_out : null,
             'price_per_night' => $this->price_per_night,
             'currency' => $this->currency ?? 'USD',
+            // Listed rates are VAT inclusive; this is the tax already inside
+            // the nightly price, not something added to it.
+            'vat' => Pricing::vatBreakdown((float) $this->price_per_night),
+            'terms_and_conditions' => $this->terms(),
+            'cancellation_policy' => $this->cancellationPolicy(),
+            'cancellation_fee_percent' => $this->cancellationFeePercent(),
             'max_guests' => $this->max_guests,
             'bedrooms' => $this->bedrooms,
             'kitchens' => $this->kitchens,

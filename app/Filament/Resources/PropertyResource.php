@@ -6,6 +6,7 @@ use App\Filament\Resources\PropertyResource\Pages;
 use App\Helpers\PropertyFeatureHelper;
 use App\Models\Property;
 use App\Models\PropertyImage;
+use App\Support\Pricing;
 use Filament\Actions\ActionGroup;
 use Filament\Actions\BulkActionGroup;
 use Filament\Actions\DeleteAction;
@@ -22,6 +23,7 @@ use Filament\Forms\Components\Toggle;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Grid;
 use Filament\Schemas\Components\Section;
+use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Components\Utilities\Set;
 use Filament\Schemas\Schema;
 use Filament\Support\Enums\FontWeight;
@@ -68,7 +70,13 @@ class PropertyResource extends Resource
                         ->hint('Add the story of the stay, the atmosphere, and what makes the property special.'),
                     Grid::make(2)
                         ->components([
-                            TextInput::make('price_per_night')->numeric()->required(),
+                            TextInput::make('price_per_night')
+                                ->numeric()
+                                ->required()
+                                ->prefix(fn (Get $get): string => (string) ($get('currency') ?: 'MUR'))
+                                ->live(onBlur: true)
+                                ->helperText(fn (?string $state): string => static::vatHint($state))
+                                ->hint('Guests are quoted this exact amount - it already includes VAT.'),
                             Select::make('currency')
                                 ->options([
                                     'USD' => 'USD',
@@ -157,6 +165,28 @@ class PropertyResource extends Resource
                                 ->native(false)
                                 ->hint('Optional. This will be shown on the public page if set.'),
                         ]),
+                ]),
+            Section::make('Terms & cancellation')
+                ->columnSpanFull()
+                ->description('Shown to the guest before they book, and attached to their confirmation. New properties start from the house defaults - edit them to suit this property.')
+                ->collapsed()
+                ->components([
+                    RichEditor::make('terms_and_conditions')
+                        ->label('Terms and conditions')
+                        ->default(fn (): string => (string) config('kozy.policies.terms'))
+                        ->hint('House rules, responsibilities and liability for this property.'),
+                    RichEditor::make('cancellation_policy')
+                        ->label('Cancellation policy')
+                        ->default(fn (): string => (string) config('kozy.policies.cancellation'))
+                        ->hint('What a guest gets back, and when.'),
+                    TextInput::make('cancellation_fee_percent')
+                        ->label('Cancellation fee')
+                        ->numeric()
+                        ->minValue(0)
+                        ->maxValue(100)
+                        ->suffix('%')
+                        ->default(fn (): float => (float) config('kozy.policies.cancellation_fee_percent'))
+                        ->hint('Charged on a late cancellation. Leave empty to use the house default.'),
                 ]),
             Section::make('Property gallery')
                 ->columnSpanFull()
@@ -328,5 +358,28 @@ class PropertyResource extends Resource
             'create' => Pages\CreateProperty::route('/create'),
             'edit' => Pages\EditProperty::route('/{record}/edit'),
         ];
+    }
+
+    /**
+     * Listed rates are VAT inclusive, so an owner typing a price needs to see
+     * how much of it is tax rather than working it out themselves.
+     */
+    protected static function vatHint(?string $price): string
+    {
+        $amount = (float) $price;
+
+        if ($amount <= 0) {
+            return '';
+        }
+
+        $breakdown = Pricing::vatBreakdown($amount);
+
+        return sprintf(
+            'Includes %s%% %s: %s net + %s tax.',
+            rtrim(rtrim(number_format(Pricing::vatPercent(), 2, '.', ''), '0'), '.'),
+            (string) config('kozy.vat.label', 'VAT'),
+            number_format($breakdown['net'], 2),
+            number_format($breakdown['vat'], 2),
+        );
     }
 }

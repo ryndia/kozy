@@ -43,6 +43,11 @@ export type PublicProperty = {
     images?: Array<string | PropertyImageItem> | null;
     average_rating?: number | null;
     reviews?: PropertyReviewItem[] | null;
+    /** Authored per property in the back office, rich text. */
+    terms_and_conditions?: string | null;
+    cancellation_policy?: string | null;
+    cancellation_fee_percent?: number | null;
+    vat?: { total: number; net: number; vat: number; rate: number } | null;
 };
 
 export type PropertySearchFilters = {

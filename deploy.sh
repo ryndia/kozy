@@ -423,8 +423,10 @@ MAIL_RELAY_PASSWORD=
 
 # ── Stripe ─────────────────────────────────────────────────────────
 # Leave empty to settle bookings manually instead of charging cards.
-# STRIPE_KEY is compiled into the JS bundle via VITE_STRIPE_KEY — after
-# changing it, rebuild assets (./deploy.sh), not just the config cache.
+# STRIPE_KEY is served to the browser by the API, not compiled into the
+# bundle, so a config cache refresh is enough after changing these.
+# STRIPE_WEBHOOK_SECRET is required: without it a guest who closes the tab
+# mid-payment is charged but never confirmed.
 STRIPE_KEY=__SET_ME__
 STRIPE_SECRET=__SET_ME__
 STRIPE_WEBHOOK_SECRET=__SET_ME__
@@ -437,7 +439,6 @@ AWS_BUCKET=
 AWS_USE_PATH_STYLE_ENDPOINT=false
 
 VITE_APP_NAME="${APP_NAME}"
-VITE_STRIPE_KEY="${STRIPE_KEY}"
 
 # ── Docker / Sail runtime ──────────────────────────────────────────
 # Ports are offset from visual.ryndia.space (8080/3307/6380) so both
@@ -498,7 +499,7 @@ server {
     # Stripe.js needs js.stripe.com (script + frame) and api.stripe.com
     # (connect); Inertia/React and Filament/Livewire need inline+eval;
     # fonts come from Bunny Fonts (laravel-vite-plugin/fonts).
-    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://js.stripe.com; script-src-elem 'self' 'unsafe-inline' https://js.stripe.com; style-src 'self' 'unsafe-inline' https://fonts.bunny.net; font-src 'self' data: https://fonts.bunny.net; img-src 'self' data: blob: https:; connect-src 'self' https://api.stripe.com; frame-src 'self' https://js.stripe.com https://hooks.stripe.com; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self';" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://js.stripe.com https://*.js.stripe.com https://checkout.stripe.com; script-src-elem 'self' 'unsafe-inline' https://js.stripe.com https://*.js.stripe.com https://checkout.stripe.com; style-src 'self' 'unsafe-inline' https://fonts.bunny.net; font-src 'self' data: https://fonts.bunny.net; img-src 'self' data: blob: https:; connect-src 'self' https://api.stripe.com https://checkout.stripe.com https://link.com https://*.link.com; frame-src 'self' https://js.stripe.com https://*.js.stripe.com https://hooks.stripe.com https://checkout.stripe.com https://link.com https://*.link.com; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self';" always;
 
     access_log /var/log/nginx/kozy.ryndia.space-access.log;
     error_log  /var/log/nginx/kozy.ryndia.space-error.log;

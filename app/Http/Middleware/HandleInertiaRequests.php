@@ -2,6 +2,7 @@
 
 namespace App\Http\Middleware;
 
+use App\Support\Pricing;
 use Illuminate\Http\Request;
 use Inertia\Middleware;
 
@@ -42,6 +43,16 @@ class HandleInertiaRequests extends Middleware
                 'user' => $request->user(),
             ],
             'sidebarOpen' => ! $request->hasCookie('sidebar_state') || $request->cookie('sidebar_state') === 'true',
+            // Read-only conversion for browsing. Bookings are always priced and
+            // charged in the property's own currency - the UI says so wherever
+            // a converted figure is shown.
+            'pricing' => [
+                'vat_rate' => Pricing::vatRate(),
+                'vat_percent' => Pricing::vatPercent(),
+                'vat_label' => config('kozy.vat.label', 'VAT'),
+                'currencies' => Pricing::displayCurrencies(),
+                'rates' => config('kozy.currency.rates', []),
+            ],
         ];
     }
 }

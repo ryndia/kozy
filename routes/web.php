@@ -27,10 +27,8 @@ Route::get('/properties/{slug}', function ($slug) {
 })->name('properties.show');
 
 Route::post('/reservation/register', [ReservationAuthController::class, 'start']);
-Route::post('/reservation/verify', [ReservationAuthController::class, 'verify']);
 Route::post('/client/auth/start', [ClientAccessController::class, 'start'])->name('client.auth.start');
 Route::post('/client/auth/login', [ClientAccessController::class, 'login'])->name('client.auth.login');
-Route::post('/client/auth/verify', [ClientAccessController::class, 'verify'])->name('client.auth.verify');
 Route::get('/client/auth/password', [ClientAccessController::class, 'showPassword'])->name('client.auth.password');
 Route::post('/client/auth/password', [ClientAccessController::class, 'storePassword'])->name('client.auth.password.store');
 

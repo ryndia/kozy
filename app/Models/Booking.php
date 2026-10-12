@@ -4,14 +4,18 @@ namespace App\Models;
 
 use Carbon\CarbonInterface;
 use Database\Factories\BookingFactory;
+use Guava\Calendar\Contracts\Eventable;
+use Guava\Calendar\ValueObjects\CalendarEvent;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Route;
 
-class Booking extends Model
+class Booking extends Model implements Eventable
 {
     /** @use HasFactory<BookingFactory> */
     use HasFactory;
@@ -23,6 +27,19 @@ class Booking extends Model
     public const STATUS_CANCELLED = 'cancelled';
 
     public const STATUS_COMPLETED = 'completed';
+
+    /**
+     * Status colours for the back-office calendar, so a month view reads at a
+     * glance without a legend.
+     *
+     * @var array<string, string>
+     */
+    public const CALENDAR_COLOURS = [
+        self::STATUS_PENDING => '#d97706',
+        self::STATUS_CONFIRMED => '#059669',
+        self::STATUS_COMPLETED => '#2E6A9E',
+        self::STATUS_CANCELLED => '#e11d48',
+    ];
 
     /**
      * Statuses that still hold nights for a property, i.e. everything but
@@ -42,6 +59,9 @@ class Booking extends Model
         'check_in' => 'date',
         'check_out' => 'date',
         'total_price' => 'decimal:2',
+        'confirmation_sent_at' => 'datetime',
+        'check_in_reminder_sent_at' => 'datetime',
+        'cancelled_at' => 'datetime',
     ];
 
     /**
@@ -66,6 +86,24 @@ class Booking extends Model
     public function payment(): HasOne
     {
         return $this->hasOne(Payment::class);
+    }
+
+    /**
+     * @return HasMany<Refund, $this>
+     */
+    public function refunds(): HasMany
+    {
+        return $this->hasMany(Refund::class)->latest();
+    }
+
+    /**
+     * Who cancelled this stay. Null means the guest did it themselves.
+     *
+     * @return BelongsTo<User, $this>
+     */
+    public function cancelledBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'cancelled_by_id');
     }
 
     /**
@@ -182,5 +220,35 @@ class Booking extends Model
         return $this->status !== self::STATUS_CANCELLED
             && (bool) $this->check_out?->isPast()
             && ! $this->review;
+    }
+
+    /**
+     * How this stay appears on the back-office calendar.
+     *
+     * The end date is exclusive, which matches how a stay is stored: a booking
+     * that checks out on the 10th occupies up to the 9th, and the 10th is free
+     * for the next guest.
+     */
+    public function toCalendarEvent(): CalendarEvent
+    {
+        return CalendarEvent::make($this)
+            ->title(sprintf(
+                '%s · %s',
+                $this->property->title ?? 'Unknown property',
+                $this->client->name ?? 'Unknown guest',
+            ))
+            ->start($this->check_in)
+            ->end($this->check_out)
+            ->allDay()
+            ->backgroundColor(self::CALENDAR_COLOURS[$this->status])
+            ->textColor('#ffffff')
+            // Clicking a stay opens it. Guarded, so the model stays usable if
+            // the admin panel's routes are not loaded.
+            ->url(
+                Route::has('filament.admin.resources.bookings.edit')
+                    ? route('filament.admin.resources.bookings.edit', ['record' => $this->getKey()])
+                    : url("/admin/bookings/{$this->getKey()}/edit"),
+                '_self',
+            );
     }
 }

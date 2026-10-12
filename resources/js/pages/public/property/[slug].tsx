@@ -1,6 +1,9 @@
 import { usePage } from '@inertiajs/react';
 import React, { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
+import CurrencySwitcher from '@/components/currency-switcher';
+import PriceDisplay from '@/components/price-display';
+import PropertyPolicies from '@/components/property-policies';
 import PublicThemeToggle from '@/components/public-theme-toggle';
 import { apiGet, apiPost, extractErrorMessage } from '@/lib/api';
 import {
@@ -330,11 +333,10 @@ export default function PropertyShow({ slug: initialSlug }: { slug?: string }) {
     );
     const [reservationDialogOpen, setReservationDialogOpen] = useState(false);
     const [reservationStep, setReservationStep] = useState<
-        'account' | 'otp' | 'login' | 'success'
+        'account' | 'login' | 'success'
     >('account');
     const [reservationLoading, setReservationLoading] = useState(false);
     const [reservationOtpEmail, setReservationOtpEmail] = useState('');
-    const [reservationOtp, setReservationOtp] = useState('');
     const [reservationError, setReservationError] = useState<string | null>(
         null,
     );
@@ -604,7 +606,6 @@ export default function PropertyShow({ slug: initialSlug }: { slug?: string }) {
     const resetReservationFlow = () => {
         setReservationDialogOpen(false);
         setReservationStep('account');
-        setReservationOtp('');
         setReservationOtpEmail('');
         setReservationError(null);
         setReservationResult(null);
@@ -670,29 +671,9 @@ export default function PropertyShow({ slug: initialSlug }: { slug?: string }) {
                 return;
             }
 
-            setReservationStep('otp');
-            toast.success(
-                'Your verification code has been sent. Enter it to continue to password setup.',
-            );
-        } catch (error) {
-            const message = extractErrorMessage(error);
-            setReservationError(message);
-            toast.error(message);
-        } finally {
-            setReservationLoading(false);
-        }
-    };
-
-    const handleVerifyGuestReservation = async () => {
-        setReservationLoading(true);
-        setReservationError(null);
-
-        try {
-            const response = await apiPost('/client/auth/verify', {
-                otp: reservationOtp,
-            });
-            window.location.href =
-                response.redirect_url || '/client/auth/password';
+            // The account and booking now exist: straight on to paying for
+            // the room. The password comes after the payment.
+            window.location.href = response.redirect_url || '/client/bookings';
         } catch (error) {
             const message = extractErrorMessage(error);
             setReservationError(message);
@@ -767,6 +748,7 @@ export default function PropertyShow({ slug: initialSlug }: { slug?: string }) {
                     </div>
 
                     <div className="flex flex-wrap items-center gap-3">
+                        <CurrencySwitcher />
                         <PublicThemeToggle />
                         {currentUser ? (
                             <a
@@ -894,16 +876,15 @@ export default function PropertyShow({ slug: initialSlug }: { slug?: string }) {
                             <div className="text-xs tracking-[0.18em] text-muted-foreground uppercase">
                                 From
                             </div>
-                            <div className="mt-2 flex items-end gap-2">
-                                <span className="text-4xl font-semibold tracking-[-0.06em] text-foreground">
-                                    {formatPrice(
-                                        property.price_per_night,
-                                        property.currency,
+                            <div className="mt-2">
+                                <PriceDisplay
+                                    amount={Number(
+                                        property.price_per_night ?? 0,
                                     )}
-                                </span>
-                                <span className="pb-1 text-sm text-muted-foreground">
-                                    / night
-                                </span>
+                                    currency={property.currency ?? 'MUR'}
+                                    suffix="/ night"
+                                    className="text-4xl font-semibold tracking-[-0.06em] text-foreground"
+                                />
                             </div>
                         </div>
 
@@ -1047,9 +1028,8 @@ export default function PropertyShow({ slug: initialSlug }: { slug?: string }) {
 
                         {!currentUser ? (
                             <div className="mt-4 text-xs text-muted-foreground">
-                                Enter your name and email, verify the OTP sent
-                                to your inbox, then set your password to
-                                finalize the reservation.
+                                Enter your name and email to go straight to
+                                payment. You will choose a password afterwards.
                             </div>
                         ) : (
                             <div className="mt-4 text-xs text-emerald-700 dark:text-emerald-300">
@@ -1383,6 +1363,8 @@ export default function PropertyShow({ slug: initialSlug }: { slug?: string }) {
                     </section>
                 ) : null}
 
+                <PropertyPolicies property={property} />
+
                 <section className="mt-8 rounded-[32px] border border-border bg-card p-6 shadow-[0_20px_60px_rgba(15,23,42,0.06)]">
                     <div className="flex items-end justify-between gap-4">
                         <div>
@@ -1526,20 +1508,16 @@ export default function PropertyShow({ slug: initialSlug }: { slug?: string }) {
                         <DialogTitle>
                             {reservationStep === 'account'
                                 ? 'Create your account to reserve'
-                                : reservationStep === 'otp'
-                                  ? 'Verify your email'
-                                  : reservationStep === 'login'
-                                    ? 'Log in to finish your reservation'
-                                    : 'Reservation confirmed'}
+                                : reservationStep === 'login'
+                                  ? 'Log in to finish your reservation'
+                                  : 'Reservation confirmed'}
                         </DialogTitle>
                         <DialogDescription>
                             {reservationStep === 'account'
-                                ? 'Submit your name and email. We will send a one-time code, then you will set your password on the next screen.'
-                                : reservationStep === 'otp'
-                                  ? `Enter the 6-digit code we sent to ${reservationOtpEmail}. After verification you will be redirected to set your password.`
-                                  : reservationStep === 'login'
-                                    ? `${reservationOtpEmail} already has an account. Enter your password and we will reserve these dates right away.`
-                                    : 'Your booking and account are ready. You can now view your payment, receipt, and history.'}
+                                ? 'Enter your name and email to hold these dates and go straight to payment. You will choose a password once you have paid.'
+                                : reservationStep === 'login'
+                                  ? `${reservationOtpEmail} already has an account. Enter your password and we will reserve these dates right away.`
+                                  : 'Your booking and account are ready. You can now view your payment, receipt, and history.'}
                         </DialogDescription>
                     </DialogHeader>
 
@@ -1591,8 +1569,8 @@ export default function PropertyShow({ slug: initialSlug }: { slug?: string }) {
                                 className="crystal-button w-full justify-center bg-primary text-primary-foreground hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground"
                             >
                                 {reservationLoading
-                                    ? 'Sending code...'
-                                    : 'Send verification code'}
+                                    ? 'Reserving…'
+                                    : 'Continue to payment'}
                             </button>
                         </div>
                     ) : null}
@@ -1643,50 +1621,6 @@ export default function PropertyShow({ slug: initialSlug }: { slug?: string }) {
                             >
                                 Forgot your password?
                             </a>
-                        </div>
-                    ) : null}
-
-                    {reservationStep === 'otp' ? (
-                        <div className="space-y-4">
-                            <label className="block text-sm text-foreground">
-                                <span className="mb-2 block font-medium">
-                                    Verification code
-                                </span>
-                                <input
-                                    type="text"
-                                    inputMode="numeric"
-                                    maxLength={6}
-                                    value={reservationOtp}
-                                    onChange={(event) =>
-                                        setReservationOtp(
-                                            event.target.value
-                                                .replace(/\D/g, '')
-                                                .slice(0, 6),
-                                        )
-                                    }
-                                    className="w-full rounded-2xl border border-border px-4 py-3 text-center text-lg tracking-[0.4em] focus:border-ring focus:outline-none"
-                                />
-                            </label>
-
-                            {reservationError ? (
-                                <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/50 dark:text-rose-300">
-                                    {reservationError}
-                                </div>
-                            ) : null}
-
-                            <button
-                                type="button"
-                                onClick={handleVerifyGuestReservation}
-                                disabled={
-                                    reservationLoading ||
-                                    reservationOtp.length !== 6
-                                }
-                                className="crystal-button w-full justify-center bg-primary text-primary-foreground hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground"
-                            >
-                                {reservationLoading
-                                    ? 'Verifying...'
-                                    : 'Verify and continue'}
-                            </button>
                         </div>
                     ) : null}
 

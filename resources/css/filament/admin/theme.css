@@ -1,0 +1,12 @@
+@import '../../../../vendor/filament/filament/resources/css/theme.css';
+
+/* Tailwind must scan the calendar package's own markup, or the utility classes
+   its views rely on are never emitted into this theme's stylesheet. */
+@source '../../../../vendor/guava/calendar/resources/**/*';
+
+/* The package's own styles, so the calendar sits in the Filament look rather
+   than its upstream one. */
+@import '../../../../vendor/guava/calendar/resources/css/theme.css';
+
+@source '../../../../app/Filament/**/*';
+@source '../../../../resources/views/filament/**/*';

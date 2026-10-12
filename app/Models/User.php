@@ -37,7 +37,7 @@ use Laravel\Sanctum\HasApiTokens;
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
  */
-#[Fillable(['name', 'email', 'phone', 'password', 'role', 'otp_verified_at'])]
+#[Fillable(['name', 'email', 'phone', 'password', 'must_set_password', 'role', 'otp_verified_at'])]
 #[Hidden(['password', 'two_factor_secret', 'two_factor_recovery_codes', 'remember_token'])]
 class User extends Authenticatable implements FilamentUser, PasskeyUser
 {
@@ -144,6 +144,7 @@ class User extends Authenticatable implements FilamentUser, PasskeyUser
             'email_verified_at' => 'datetime',
             'otp_verified_at' => 'datetime',
             'password' => 'hashed',
+            'must_set_password' => 'boolean',
             'two_factor_confirmed_at' => 'datetime',
         ];
     }

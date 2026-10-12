@@ -2,11 +2,14 @@
 
 namespace App\Filament\Resources;
 
+use App\Actions\Bookings\CancelBookingAction;
 use App\Filament\Forms\RelationshipSelects;
 use App\Filament\Resources\BookingResource\Pages;
 use App\Models\Booking;
 use App\Models\Payment;
 use App\Models\Property;
+use App\Support\CancellationPolicy;
+use Filament\Actions\Action;
 use Filament\Actions\ActionGroup;
 use Filament\Actions\BulkActionGroup;
 use Filament\Actions\DeleteAction;
@@ -14,8 +17,11 @@ use Filament\Actions\DeleteBulkAction;
 use Filament\Actions\EditAction;
 use Filament\Actions\ViewAction;
 use Filament\Forms\Components\DatePicker;
+use Filament\Forms\Components\Placeholder;
 use Filament\Forms\Components\Select;
+use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
+use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Grid;
 use Filament\Schemas\Components\Section;
@@ -207,6 +213,7 @@ class BookingResource extends Resource
                 ActionGroup::make([
                     ViewAction::make(),
                     EditAction::make(),
+                    static::cancelAction(),
                     DeleteAction::make(),
                 ]),
             ])
@@ -301,5 +308,67 @@ class BookingResource extends Resource
     protected static function propertyFrom(Get $get): ?Property
     {
         return Property::query()->whereKey($get('property_id'))->first();
+    }
+
+    /**
+     * Cancel a stay on a guest's behalf.
+     *
+     * Unlike the guest's own cancel button this works on a stay that has
+     * already started, which is exactly why it insists on a reason. The refund
+     * is prefilled from the property's policy - nothing, once check-in has
+     * passed - and can be overridden when the circumstances warrant it.
+     */
+    protected static function cancelAction(): Action
+    {
+        return Action::make('cancel')
+            ->label('Cancel reservation')
+            ->icon('heroicon-o-x-circle')
+            ->color('danger')
+            ->visible(fn (Booking $record): bool => $record->status !== Booking::STATUS_CANCELLED)
+            ->schema([
+                Placeholder::make('quote')
+                    ->label('Policy refund')
+                    ->content(function (Booking $record): string {
+                        $quote = CancellationPolicy::quote($record);
+
+                        return sprintf(
+                            '%s %s of %s %s paid. %s',
+                            $quote->currency,
+                            number_format($quote->refund, 2),
+                            $quote->currency,
+                            number_format($quote->paid, 2),
+                            $quote->explanation,
+                        );
+                    }),
+                TextInput::make('refund_amount')
+                    ->label('Refund to issue')
+                    ->numeric()
+                    ->minValue(0)
+                    ->prefix(fn (Booking $record): string => $record->currency)
+                    ->default(fn (Booking $record): float => CancellationPolicy::quote($record)->refund)
+                    ->helperText('Capped at what the guest actually paid. Leave as-is to follow the policy.'),
+                Textarea::make('reason')
+                    ->label('Reason')
+                    ->required()
+                    ->maxLength(500)
+                    ->helperText('Shown to the guest in their cancellation email.'),
+            ])
+            ->requiresConfirmation()
+            ->modalHeading('Cancel this reservation?')
+            ->modalSubmitActionLabel('Cancel reservation')
+            ->action(function (Booking $record, array $data): void {
+                app(CancelBookingAction::class)->forAdmin(
+                    $record,
+                    auth()->user(),
+                    $data['reason'] ?? null,
+                    isset($data['refund_amount']) ? (float) $data['refund_amount'] : null,
+                );
+
+                Notification::make()
+                    ->success()
+                    ->title('Reservation cancelled')
+                    ->body('The guest has been emailed. Any refund is in the payout queue.')
+                    ->send();
+            });
     }
 }

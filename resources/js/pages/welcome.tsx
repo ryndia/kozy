@@ -1,7 +1,9 @@
 import { Head, usePage } from '@inertiajs/react';
 import { useMemo, useState } from 'react';
 import AppLogoIcon from '@/components/app-logo-icon';
+import CurrencySwitcher from '@/components/currency-switcher';
 import DestinationAutocomplete from '@/components/destination-autocomplete';
+import PriceDisplay from '@/components/price-display';
 import PublicThemeToggle from '@/components/public-theme-toggle';
 import {
     buildPropertiesUrl,
@@ -161,6 +163,7 @@ export default function Welcome({
                         </nav>
 
                         <div className="flex items-center gap-3">
+                            <CurrencySwitcher />
                             <PublicThemeToggle />
                             {authUser ? (
                                 <a
@@ -527,13 +530,18 @@ export default function Welcome({
                                                         )}
                                                     </div>
                                                     <div className="mt-4 flex items-center justify-between gap-2">
-                                                        <span className="text-base font-semibold text-foreground">
-                                                            {formatPrice(
-                                                                property.price_per_night,
-                                                                property.currency ??
-                                                                    'USD',
+                                                        <PriceDisplay
+                                                            amount={Number(
+                                                                property.price_per_night ??
+                                                                    0,
                                                             )}
-                                                        </span>
+                                                            currency={
+                                                                property.currency ??
+                                                                'MUR'
+                                                            }
+                                                            vatStyle="short"
+                                                            className="text-base font-semibold text-foreground"
+                                                        />
                                                         <span className="text-sm font-semibold text-foreground">
                                                             View {'>'}
                                                         </span>

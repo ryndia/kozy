@@ -9,6 +9,7 @@
         "php": "^8.3",
         "barryvdh/laravel-dompdf": "^3.1",
         "filament/filament": "^5.7",
+        "guava/calendar": "^3.2",
         "inertiajs/inertia-laravel": "^3.0",
         "intervention/image": "^4.2",
         "laravel/chisel": "^0.1.0",

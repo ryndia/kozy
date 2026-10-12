@@ -65,9 +65,10 @@ class PaymentResource extends Resource
                         Select::make('method')
                             ->options([
                                 'card' => 'Card',
-                                'stripe' => 'Stripe',
+                                Payment::METHOD_STRIPE => 'Stripe',
                                 'cash' => 'Cash',
                                 'bank_transfer' => 'Bank transfer',
+                                Payment::METHOD_MANUAL => 'Manual',
                             ])
                             ->native(false)
                             ->placeholder('Not specified'),

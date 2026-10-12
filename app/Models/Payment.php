@@ -6,6 +6,7 @@ use Database\Factories\PaymentFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Payment extends Model
 {
@@ -20,11 +21,27 @@ class Payment extends Model
 
     public const STATUS_REFUNDED = 'refunded';
 
-    protected $fillable = ['booking_id', 'amount', 'method', 'status', 'transaction_ref', 'paid_at', 'receipt_path'];
+    public const METHOD_STRIPE = 'stripe';
+
+    public const METHOD_MANUAL = 'manual';
+
+    protected $fillable = [
+        'booking_id',
+        'amount',
+        'refunded_amount',
+        'method',
+        'status',
+        'transaction_ref',
+        'provider_payload',
+        'paid_at',
+        'receipt_path',
+    ];
 
     protected $casts = [
         'amount' => 'decimal:2',
+        'refunded_amount' => 'decimal:2',
         'paid_at' => 'datetime',
+        'provider_payload' => 'array',
     ];
 
     /**
@@ -51,5 +68,29 @@ class Payment extends Model
     public function getCurrencyAttribute(): string
     {
         return $this->booking?->currency ?: 'MUR';
+    }
+
+    public function isPaid(): bool
+    {
+        return $this->status === self::STATUS_PAID;
+    }
+
+    /**
+     * @return HasMany<Refund, $this>
+     */
+    public function refunds(): HasMany
+    {
+        return $this->hasMany(Refund::class);
+    }
+
+    /**
+     * What could still be given back: the amount paid, less anything already
+     * refunded.
+     */
+    public function refundableAmount(): float
+    {
+        return $this->isPaid() || $this->status === self::STATUS_REFUNDED
+            ? max(0, round((float) $this->amount - (float) $this->refunded_amount, 2))
+            : 0.0;
     }
 }

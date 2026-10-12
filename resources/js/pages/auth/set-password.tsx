@@ -51,11 +51,11 @@ export default function SetPassword({ email, passwordRules }: Props) {
                         Set your password
                     </h1>
                     <p className="text-sm text-muted-foreground">
-                        Verified for{' '}
+                        Choose a password for{' '}
                         <span className="font-medium text-foreground">
                             {email}
-                        </span>
-                        . Set your password to finish accessing the website.
+                        </span>{' '}
+                        so you can sign in and manage your bookings later.
                     </p>
                 </div>
 
@@ -115,5 +115,5 @@ export default function SetPassword({ email, passwordRules }: Props) {
 SetPassword.layout = {
     title: 'Set your password',
     description:
-        'Finish verifying your email, choose a password, and access your client area.',
+        'Choose a password so you can sign in and manage your bookings later.',
 };

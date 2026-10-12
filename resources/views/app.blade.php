@@ -37,6 +37,10 @@
 
         @fonts
 
+        {{-- Stripe.js must come straight from Stripe, never bundled or self-hosted
+             (PCI). The dahlia build is the one with Checkout's embedded form. --}}
+        <script src="https://js.stripe.com/dahlia/stripe.js"></script>
+
         @viteReactRefresh
         @vite(['resources/css/app.css', 'resources/js/app.tsx', "resources/js/pages/{$page['component']}.tsx"])
         <x-inertia::head>
