@@ -23,9 +23,7 @@ Route::middleware(['web', 'auth'])->group(function () {
     Route::get('/client/bookings/{id}/receipt', [ClientBookingController::class, 'receipt'])->whereNumber('id');
 
     // Payments
-    Route::post('/payments/create-intent', [PaymentController::class, 'createIntent']);
-    Route::post('/payments/confirm', [PaymentController::class, 'confirm']);
-    Route::post('/payments/checkout-session', [PaymentController::class, 'createCheckoutSession']);
+    Route::post('/payments/card', [PaymentController::class, 'pay']);
 
     // Reviews
     Route::post('/reviews', [ReviewController::class, 'store']);
@@ -42,8 +40,3 @@ Route::middleware(['web', 'auth'])->group(function () {
     Route::post('/auth/logout', [AuthController::class, 'logout']);
     Route::get('/auth/user', [AuthController::class, 'user']);
 });
-
-// Stripe's settlement notifications. Stripe calls this, so it sits outside the
-// session guard - the signature on the raw body is what authenticates it.
-Route::post('/payments/stripe/webhook', [PaymentController::class, 'webhook'])
-    ->name('payments.stripe.webhook');

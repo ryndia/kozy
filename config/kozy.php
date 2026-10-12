@@ -57,6 +57,26 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Card payments
+    |--------------------------------------------------------------------------
+    |
+    | "simulated" shows a test card form: it accepts only the test cards in
+    | App\Support\SimulatedCardGateway, moves no money, and refunds complete on
+    | the spot. It stands in for the MCB gateway until that is integrated - see
+    | MCB_INTEGRATION_TODO.md. "disabled" turns card payments off, and bookings
+    | are then settled by hand in the back office.
+    |
+    | Production defaults to "disabled", so a test payment can only confirm a
+    | real booking there if it is switched on deliberately.
+    |
+    */
+
+    'payments' => [
+        'card' => env('KOZY_CARD_PAYMENTS', env('APP_ENV') === 'production' ? 'disabled' : 'simulated'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Guest reminders
     |--------------------------------------------------------------------------
     |

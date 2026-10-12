@@ -2,8 +2,8 @@ import { Head, Link, usePage } from '@inertiajs/react';
 import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import CancelBookingDialog from '@/components/cancel-booking-dialog';
+import CardPaymentDialog from '@/components/card-payment-dialog';
 import PriceDisplay from '@/components/price-display';
-import StripePaymentDialog from '@/components/stripe-payment-dialog';
 import { Button } from '@/components/ui/button';
 import { extractErrorMessage } from '@/lib/api';
 import {
@@ -653,7 +653,7 @@ export default function MyBookings() {
                 </div>
             </div>
 
-            <StripePaymentDialog
+            <CardPaymentDialog
                 booking={payTarget}
                 onOpenChange={handlePayDialogChange}
                 onPaid={handlePaid}

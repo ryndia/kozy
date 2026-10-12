@@ -27,7 +27,8 @@ class RefundQueueTest extends TestCase
         parent::setUp();
 
         Notification::fake();
-        config()->set('services.stripe.secret', null);
+        // Every refund waits in the queue rather than completing on its own.
+        config()->set('kozy.payments.card', 'disabled');
 
         $this->admin = User::factory()->create([
             'role' => 'admin',

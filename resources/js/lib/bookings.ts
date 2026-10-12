@@ -14,26 +14,12 @@ export type CancellationQuote = {
     full_refund: boolean;
 };
 
-/** What the API hands back when a card payment is started. */
-export type PaymentIntentResponse = {
-    client_secret: string;
-    payment_intent_id: string;
-    publishable_key: string;
-    amount: number;
-    currency: string;
-    stripe_configured: true;
-    /** Set when Stripe had already taken the money and the API settled it. */
-    already_paid?: boolean;
-    message?: string;
-};
-
-/** What the API hands back when a Checkout Session is opened. */
-export type CheckoutSessionResponse = {
-    client_secret: string;
-    publishable_key: string;
-    amount: number;
-    currency: string;
-    stripe_configured: true;
+/** What the guest types into the (simulated) card form. */
+export type CardDetails = {
+    card_name: string;
+    card_number: string;
+    card_expiry: string;
+    card_cvc: string;
 };
 
 export type ClientBookingRefund = {
@@ -197,38 +183,15 @@ export function cancelClientBooking(bookingId: number, reason?: string) {
     });
 }
 
-export function createPaymentIntent(
-    bookingId: number,
-): Promise<PaymentIntentResponse> {
-    return apiPost('/api/payments/create-intent', { booking_id: bookingId });
-}
-
 /**
- * Open a Stripe Checkout Session for a booking; its client secret drives the
- * embedded payment form.
+ * Pay for a booking by card. Approval confirms the booking in the same
+ * request; a declined card rejects with the reason.
  */
-export function createCheckoutSession(
+export function payBookingByCard(
     bookingId: number,
-): Promise<CheckoutSessionResponse> {
-    return apiPost('/api/payments/checkout-session', { booking_id: bookingId });
-}
-
-export async function fetchClientBooking(
-    bookingId: number,
-): Promise<ClientBooking> {
-    const response = await apiGet(`/api/client/bookings/${bookingId}`);
-
-    return response.booking;
-}
-
-export function confirmBookingPayment(
-    bookingId: number,
-    paymentIntentId?: string,
-) {
-    return apiPost('/api/payments/confirm', {
-        booking_id: bookingId,
-        ...(paymentIntentId ? { payment_intent_id: paymentIntentId } : {}),
-    });
+    card: CardDetails,
+): Promise<{ message?: string; booking: ClientBooking }> {
+    return apiPost('/api/payments/card', { booking_id: bookingId, ...card });
 }
 
 export function submitBookingReview(

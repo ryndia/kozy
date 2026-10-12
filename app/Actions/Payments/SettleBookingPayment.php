@@ -11,9 +11,9 @@ use Illuminate\Support\Facades\Log;
 /**
  * Records a payment as settled and confirms the stay it belongs to.
  *
- * Every route to a paid booking ends here - a browser returning from Stripe, a
- * Stripe webhook, a manual settlement in development - so they cannot drift on
- * what settling means. Those routes race each other routinely, so the write is
+ * Every route to a paid booking ends here - a card payment, a gateway
+ * notification, a settlement recorded in the back office - so they cannot drift
+ * on what settling means. Those routes can race each other, so the write is
  * idempotent and taken under a lock.
  */
 class SettleBookingPayment

@@ -53,6 +53,10 @@ class HandleInertiaRequests extends Middleware
                 'currencies' => Pricing::displayCurrencies(),
                 'rates' => config('kozy.currency.rates', []),
             ],
+            // "simulated" or "disabled" - decides what the pay dialog offers.
+            'payments' => [
+                'card' => config('kozy.payments.card'),
+            ],
         ];
     }
 }

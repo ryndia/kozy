@@ -21,7 +21,7 @@ class Payment extends Model
 
     public const STATUS_REFUNDED = 'refunded';
 
-    public const METHOD_STRIPE = 'stripe';
+    public const METHOD_CARD = 'card';
 
     public const METHOD_MANUAL = 'manual';
 

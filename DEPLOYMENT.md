@@ -114,44 +114,26 @@ If no certificate exists yet, it installs a temporary HTTP-only vhost, runs
 `certbot certonly --webroot`, then swaps in the real TLS vhost and reloads —
 so `nginx -t` never fails on a certificate that isn't there yet.
 
-## 5. Stripe
+## 5. Card payments
 
-Replace the `__SET_ME__` values in `.env`, then redeploy. The publishable key is
-served to the browser by the API rather than compiled into the bundle, so a
-config refresh is enough — no asset rebuild:
+Online card payment through **MCB's payment gateway** is not integrated yet.
+What MCB needs to provide, and what changes once they do, is tracked in
+[MCB_INTEGRATION_TODO.md](MCB_INTEGRATION_TODO.md). Until then
+`KOZY_CARD_PAYMENTS` in `.env` picks one of two modes:
+
+| Value | What guests see | Use it for |
+| --- | --- | --- |
+| `disabled` (production default) | *Pay now* says online payment is coming soon and the team will be in touch | The live site. Settle each booking by hand under **Revenue → Payments** once the guest has paid |
+| `simulated` | A test card form that accepts only the test cards it lists. No money moves, and refunds complete instantly | Local and staging. **Anyone can confirm a booking without paying in this mode**, so don't switch it on for real guests |
+
+After changing it, refresh the config (no asset rebuild needed):
 
 ```bash
 ./deploy.sh --no-pull --no-assets
 ```
 
-Leaving the keys empty is supported; bookings then settle manually — off
-production only. Production refuses to settle a booking without Stripe.
-
-### The webhook is not optional
-
-Guests pay in Stripe Checkout's embedded form, and the booking is confirmed by
-the webhook — the browser only waits to hear about it. Without the webhook a
-guest is charged but their booking never confirms. Register this endpoint in the
-Stripe dashboard:
-
-```
-https://kozy.mu/api/payments/stripe/webhook
-```
-
-Subscribe it to **`checkout.session.completed`**, **`payment_intent.succeeded`**
-and **`payment_intent.payment_failed`**, then put its signing secret in
-`STRIPE_WEBHOOK_SECRET`. Remaining Stripe setup steps are tracked in
-[STRIPE_INTEGRATION_TODO.md](STRIPE_INTEGRATION_TODO.md). It is signature-verified against the raw request body;
-an unsigned or mis-signed call is rejected with a 401 and logged, so a wrong
-secret shows up as payments stuck pending while the log fills with rejections.
-
-Settlement is idempotent and amount-checked, so a replayed webhook racing the
-browser cannot pay a booking twice, and a webhook reporting the wrong amount is
-refused rather than accepted.
-
-The nginx CSP in `deploy.sh` allows the hosts Stripe documents for Stripe.js,
-Checkout and Link (`js.stripe.com`, `*.js.stripe.com`, `checkout.stripe.com`,
-`api.stripe.com`, `hooks.stripe.com`, `link.com`, `*.link.com`).
+The `MCB_*` variables in `.env` are placeholders for the integration and are
+not read by anything yet.
 
 ## 5a. Guest mail and the scheduler
 
@@ -197,8 +179,9 @@ two disagreeing is how fee disputes start.
 
 Refunds are recorded the moment a booking is cancelled, then paid:
 
-- **Card payments** — refunded through Stripe's API inside the request.
-  Nothing to do.
+- **Card payments taken by the simulated form** — refunded instantly (no
+  money moves). Nothing to do. Once MCB is integrated, card refunds will go
+  back through MCB's API in the same way.
 - **Anything else** (cash, bank transfer, a manual entry) — no API to call, so
   these sit in **Revenue → Refunds** with a badge showing how many are owed.
   Make the transfer, then use *Mark as paid out* with the bank reference.
@@ -404,9 +387,6 @@ empty `/etc/opendkim/SigningTable` and recreates the container for you.
 **Session lost after login** — `SESSION_DOMAIN` must be exactly
 `kozy.ryndia.space`, and `SESSION_SECURE_COOKIE=true` requires HTTPS.
 
-**Stripe key change has no effect in the browser** — rebuild assets
-(`./deploy.sh --no-pull`).
-
 ---
 
 ## Security notes
@@ -415,6 +395,7 @@ empty `/etc/opendkim/SigningTable` and recreates the container for you.
 - MySQL, Redis, the app port and (by default) all mail ports bind to `127.0.0.1`.
 - `APP_DEBUG=false`, `LOG_LEVEL=error`. Use `./deploy.sh logs app` to debug.
 - Redis requires a password; MySQL has separate root and app credentials.
-- The vhost sets HSTS, `nosniff`, and a CSP scoped to Stripe and Bunny Fonts.
+- The vhost sets HSTS, `nosniff`, and a CSP scoped to the site itself and Bunny Fonts.
+  Re-run `./deploy.sh nginx` to apply CSP changes.
 - Rspamd/Fail2Ban stay off while the mail server is send-only (nothing inbound
   to filter, no public port to brute-force); turn both on with inbound mail.

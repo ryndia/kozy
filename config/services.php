@@ -28,10 +28,14 @@ return [
         'region' => env('AWS_DEFAULT_REGION', 'us-east-1'),
     ],
 
-    'stripe' => [
-        'key' => env('STRIPE_KEY'),
-        'secret' => env('STRIPE_SECRET'),
-        'webhook_secret' => env('STRIPE_WEBHOOK_SECRET'),
+    // MCB's online payment gateway (Mastercard Gateway). Not wired up yet -
+    // card payments are simulated until it is. See MCB_INTEGRATION_TODO.md.
+    'mcb' => [
+        'gateway_url' => env('MCB_GATEWAY_URL'),
+        'merchant_id' => env('MCB_MERCHANT_ID'),
+        'api_password' => env('MCB_API_PASSWORD'),
+        'api_version' => env('MCB_API_VERSION'),
+        'webhook_secret' => env('MCB_WEBHOOK_SECRET'),
     ],
 
     'slack' => [

@@ -78,7 +78,7 @@ class BookingCancelledNotification extends Notification implements ShouldQueue
             number_format($this->quote->refund, 2),
         ));
 
-        // Set expectations honestly: a Stripe refund is already on its way, a
+        // Set expectations honestly: a card refund is already on its way, a
         // returned bank transfer is not.
         if ($this->quote->hasRefund()) {
             $message->line($this->refund?->isCompleted()

@@ -54,7 +54,7 @@ class BookingFactory extends Factory
         return $this->afterCreating(function (Booking $booking) use ($status): void {
             $booking->payment()->create([
                 'amount' => $booking->total_price,
-                'method' => 'stripe',
+                'method' => 'card',
                 'status' => $status,
                 'paid_at' => $status === Payment::STATUS_PAID ? now() : null,
             ]);

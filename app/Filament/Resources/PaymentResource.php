@@ -64,8 +64,9 @@ class PaymentResource extends Resource
                             ->live(),
                         Select::make('method')
                             ->options([
-                                'card' => 'Card',
-                                Payment::METHOD_STRIPE => 'Stripe',
+                                Payment::METHOD_CARD => 'Card',
+                                // Payments taken before Stripe was removed.
+                                'stripe' => 'Stripe (legacy)',
                                 'cash' => 'Cash',
                                 'bank_transfer' => 'Bank transfer',
                                 Payment::METHOD_MANUAL => 'Manual',
@@ -146,8 +147,8 @@ class PaymentResource extends Resource
                     ->multiple(),
                 SelectFilter::make('method')
                     ->options([
-                        'card' => 'Card',
-                        'stripe' => 'Stripe',
+                        Payment::METHOD_CARD => 'Card',
+                        'stripe' => 'Stripe (legacy)',
                         'cash' => 'Cash',
                         'bank_transfer' => 'Bank transfer',
                     ]),

@@ -21,7 +21,7 @@ class PaymentFactory extends Factory
         return [
             'booking_id' => Booking::factory(),
             'amount' => fake()->numberBetween(100, 900),
-            'method' => 'stripe',
+            'method' => 'card',
             'status' => Payment::STATUS_PENDING,
             'transaction_ref' => null,
             'paid_at' => null,
@@ -32,7 +32,7 @@ class PaymentFactory extends Factory
     {
         return $this->state(fn (array $attributes): array => [
             'status' => Payment::STATUS_PAID,
-            'transaction_ref' => 'pi_'.fake()->unique()->lexify('??????????'),
+            'transaction_ref' => 'SIM-'.fake()->unique()->bothify('????????####'),
             'paid_at' => now(),
         ]);
     }

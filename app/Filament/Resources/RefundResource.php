@@ -21,9 +21,9 @@ use Filament\Tables\Table;
 /**
  * The refund payout queue.
  *
- * A Stripe refund settles itself and lands here already completed. Anything
- * paid another way has no API to call, so it sits as pending until someone
- * makes the transfer and marks it off here.
+ * A refund of a card payment settles itself and lands here already completed.
+ * Anything paid another way has no API to call, so it sits as pending until
+ * someone makes the transfer and marks it off here.
  */
 class RefundResource extends Resource
 {

@@ -25,7 +25,7 @@ class RefundFactory extends Factory
             'fee_amount' => 0,
             'currency' => 'MUR',
             'status' => Refund::STATUS_PENDING,
-            'method' => 'stripe',
+            'method' => 'card',
             'reason' => null,
         ];
     }

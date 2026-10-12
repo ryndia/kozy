@@ -117,7 +117,7 @@ class AdminPanelTest extends TestCase
         $payment = Payment::create([
             'booking_id' => $booking->id,
             'amount' => 450,
-            'method' => 'stripe',
+            'method' => 'card',
             'status' => Payment::STATUS_PENDING,
         ]);
 

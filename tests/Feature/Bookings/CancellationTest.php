@@ -12,7 +12,6 @@ use App\Models\User;
 use App\Notifications\BookingCancelledNotification;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Notification;
-use Stripe\Exception\InvalidRequestException;
 use Tests\TestCase;
 
 class CancellationTest extends TestCase
@@ -24,7 +23,7 @@ class CancellationTest extends TestCase
         parent::setUp();
 
         Notification::fake();
-        config()->set('services.stripe.secret', null);
+        config()->set('kozy.payments.card', 'simulated');
     }
 
     private function paidBooking(
@@ -32,6 +31,7 @@ class CancellationTest extends TestCase
         int $daysUntilCheckIn = 30,
         string $method = Payment::METHOD_MANUAL,
         float $paid = 12000,
+        string $reference = 'SIM-TEST12345678',
     ): Booking {
         $property = Property::factory()->create([
             'currency' => 'MUR',
@@ -53,7 +53,7 @@ class CancellationTest extends TestCase
             'amount' => $paid,
             'status' => Payment::STATUS_PAID,
             'method' => $method,
-            'transaction_ref' => 'pi_test_123',
+            'transaction_ref' => $reference,
             'paid_at' => now(),
         ]);
 
@@ -120,7 +120,7 @@ class CancellationTest extends TestCase
         });
     }
 
-    public function test_a_payment_taken_outside_stripe_waits_in_the_payout_queue(): void
+    public function test_a_payment_taken_by_hand_waits_in_the_payout_queue(): void
     {
         $guest = User::factory()->create();
         $booking = $this->paidBooking($guest);
@@ -139,20 +139,10 @@ class CancellationTest extends TestCase
         $this->assertSame(1, Refund::query()->outstanding()->count());
     }
 
-    public function test_a_stripe_refund_is_issued_immediately(): void
+    public function test_a_card_refund_is_issued_immediately(): void
     {
-        config()->set('services.stripe.secret', 'sk_test_123');
-
-        $this->swap(RefundBookingPayment::class, new class extends RefundBookingPayment
-        {
-            protected function createStripeRefund(string $paymentIntentId, int $amountInCents): string
-            {
-                return 're_test_'.$amountInCents;
-            }
-        });
-
         $guest = User::factory()->create();
-        $booking = $this->paidBooking($guest, method: Payment::METHOD_STRIPE);
+        $booking = $this->paidBooking($guest, method: Payment::METHOD_CARD);
 
         app(CancelBookingAction::class)->execute($booking, $guest);
 
@@ -160,7 +150,7 @@ class CancellationTest extends TestCase
         $payment = $booking->fresh()->payment;
 
         $this->assertSame(Refund::STATUS_COMPLETED, $refund->status);
-        $this->assertSame('re_test_1200000', $refund->provider_reference);
+        $this->assertStringStartsWith('SIM-RF-', $refund->provider_reference);
         $this->assertNotNull($refund->processed_at);
 
         // Fully returned, so the payment is now a refunded payment.
@@ -168,21 +158,11 @@ class CancellationTest extends TestCase
         $this->assertSame(12000.0, (float) $payment->refunded_amount);
     }
 
-    public function test_a_partial_stripe_refund_leaves_the_payment_paid(): void
+    public function test_a_partial_card_refund_leaves_the_payment_paid(): void
     {
-        config()->set('services.stripe.secret', 'sk_test_123');
-
-        $this->swap(RefundBookingPayment::class, new class extends RefundBookingPayment
-        {
-            protected function createStripeRefund(string $paymentIntentId, int $amountInCents): string
-            {
-                return 're_partial';
-            }
-        });
-
         $guest = User::factory()->create();
         // Ten days' notice keeps 25%, so only 9,000 of 12,000 goes back.
-        $booking = $this->paidBooking($guest, daysUntilCheckIn: 10, method: Payment::METHOD_STRIPE);
+        $booking = $this->paidBooking($guest, daysUntilCheckIn: 10, method: Payment::METHOD_CARD);
 
         app(CancelBookingAction::class)->execute($booking, $guest);
 
@@ -192,29 +172,28 @@ class CancellationTest extends TestCase
         $this->assertSame(9000.0, (float) $payment->refunded_amount);
     }
 
-    public function test_a_refund_stripe_refuses_is_kept_for_chasing(): void
+    public function test_a_card_payment_recorded_by_hand_waits_in_the_payout_queue(): void
     {
-        config()->set('services.stripe.secret', 'sk_test_123');
-
-        $this->swap(RefundBookingPayment::class, new class extends RefundBookingPayment
-        {
-            protected function createStripeRefund(string $paymentIntentId, int $amountInCents): string
-            {
-                throw new InvalidRequestException('Charge has already been refunded.');
-            }
-        });
-
         $guest = User::factory()->create();
-        $booking = $this->paidBooking($guest, method: Payment::METHOD_STRIPE);
+        // Marked as card in the back office, but not taken by the gateway, so
+        // there is nothing for the gateway to reverse.
+        $booking = $this->paidBooking($guest, method: Payment::METHOD_CARD, reference: 'POS-88123');
 
         app(CancelBookingAction::class)->execute($booking, $guest);
 
-        $refund = $booking->refunds()->sole();
+        $this->assertSame(Refund::STATUS_PENDING, $booking->refunds()->sole()->status);
+    }
 
-        // The booking is still cancelled and the debt is still on the books.
-        $this->assertSame(Booking::STATUS_CANCELLED, $booking->fresh()->status);
-        $this->assertSame(Refund::STATUS_FAILED, $refund->status);
-        $this->assertStringContainsString('already been refunded', $refund->failure_reason);
+    public function test_card_refunds_wait_in_the_queue_while_card_payments_are_disabled(): void
+    {
+        config()->set('kozy.payments.card', 'disabled');
+
+        $guest = User::factory()->create();
+        $booking = $this->paidBooking($guest, method: Payment::METHOD_CARD);
+
+        app(CancelBookingAction::class)->execute($booking, $guest);
+
+        $this->assertSame(Refund::STATUS_PENDING, $booking->refunds()->sole()->status);
         $this->assertSame(Payment::STATUS_PAID, $booking->fresh()->payment->status);
     }
 
