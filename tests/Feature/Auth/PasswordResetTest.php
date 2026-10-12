@@ -79,6 +79,39 @@ class PasswordResetTest extends TestCase
         });
     }
 
+    public function test_a_reset_password_stops_the_choose_a_password_prompt(): void
+    {
+        Notification::fake();
+
+        // A guest who booked, logged out without choosing a password, and came
+        // back through "forgot password".
+        $user = User::factory()->create(['must_set_password' => true]);
+
+        $this->post(route('password.email'), ['email' => $user->email]);
+
+        Notification::assertSentTo($user, ResetPassword::class, function ($notification) use ($user) {
+            $this->post(route('password.update'), [
+                'token' => $notification->token,
+                'email' => $user->email,
+                'password' => 'password',
+                'password_confirmation' => 'password',
+            ])->assertSessionHasNoErrors();
+
+            return true;
+        });
+
+        $this->assertFalse($user->fresh()->must_set_password);
+    }
+
+    public function test_changing_other_details_keeps_the_prompt(): void
+    {
+        $user = User::factory()->create(['must_set_password' => true]);
+
+        $user->update(['name' => 'New Name']);
+
+        $this->assertTrue($user->fresh()->must_set_password);
+    }
+
     public function test_password_cannot_be_reset_with_invalid_token(): void
     {
         $user = User::factory()->create();

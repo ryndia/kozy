@@ -44,6 +44,18 @@ class User extends Authenticatable implements FilamentUser, PasskeyUser
     /** @use HasFactory<UserFactory> */
     use HasApiTokens, HasFactory, Notifiable, PasskeyAuthenticatable, TwoFactorAuthenticatable;
 
+    protected static function booted(): void
+    {
+        // A guest who booked without a password holds a random placeholder.
+        // Any later change of password - the set-password page, a reset link,
+        // the settings page - is one they chose, so stop asking for one.
+        static::updating(function (User $user): void {
+            if ($user->isDirty('password')) {
+                $user->must_set_password = false;
+            }
+        });
+    }
+
     public function canAccessPanel(Panel $panel): bool
     {
         return $this->isAdmin() || $this->isRenter();
